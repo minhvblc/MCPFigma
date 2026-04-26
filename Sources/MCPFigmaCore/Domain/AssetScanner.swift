@@ -71,14 +71,12 @@ public struct AssetScanner: Sendable {
                 figmaName: node.name,
                 reason: Self.reason(for: error)
             ))
-            return
         } catch {
             warnings.append(ScanWarning(
                 nodeId: node.id,
                 figmaName: node.name,
                 reason: "Unexpected rewrite error: \(error)"
             ))
-            return
         }
 
         guard let children = node.children else { return }

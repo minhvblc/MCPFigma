@@ -12,16 +12,25 @@ public struct ExportFailure: Equatable, Sendable {
     public let reason: String
 }
 
+public struct AssetCatalogImportSummary: Equatable, Sendable {
+    public let catalogPath: String
+    public let savedFiles: [SavedFile]
+    public let skipped: [SavedFile]
+    public let errors: [ExportFailure]
+}
+
 public struct ExportSummary: Equatable, Sendable {
     public let savedFiles: [SavedFile]
     public let skipped: [SavedFile]
     public let errors: [ExportFailure]
     public let warnings: [ScanWarning]
+    public let assetCatalogImport: AssetCatalogImportSummary?
 }
 
 public struct AssetExporter: Sendable {
     private let api: FigmaAPI
     private let scanner: AssetScanner
+    private let assetCatalogWriter: AssetCatalogWriter
     private let downloadConcurrency: Int
 
     public init(
@@ -32,6 +41,7 @@ public struct AssetExporter: Sendable {
         precondition(downloadConcurrency >= 1)
         self.api = api
         self.scanner = scanner
+        self.assetCatalogWriter = AssetCatalogWriter()
         self.downloadConcurrency = downloadConcurrency
     }
 
@@ -41,7 +51,8 @@ public struct AssetExporter: Sendable {
         outputDir: URL,
         scales: [Int] = [2, 3],
         overwrite: Bool = true,
-        selectedNodeIds: Set<String>? = nil
+        selectedNodeIds: Set<String>? = nil,
+        assetCatalogDir: URL? = nil
     ) async throws -> ExportSummary {
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
@@ -62,14 +73,14 @@ public struct AssetExporter: Sendable {
         var errors: [ExportFailure] = []
 
         for scale in scales {
-            let ids = resolved.map { $0.asset.nodeId }
+            let ids = resolved.map(\.nodeId)
             let renders: [String: URL]
             do {
                 renders = try await api.renderImages(fileKey: fileKey, nodeIds: ids, scale: scale)
             } catch {
                 for item in resolved {
                     errors.append(ExportFailure(
-                        figmaName: item.asset.figmaName,
+                        figmaName: item.figmaName,
                         reason: "renderImages(scale: \(scale)) lỗi: \(error)"
                     ))
                 }
@@ -77,11 +88,11 @@ public struct AssetExporter: Sendable {
             }
 
             let jobs: [DownloadJob] = resolved.compactMap { item in
-                guard let url = renders[item.asset.nodeId] else { return nil }
-                let filename = "\(item.finalName)@\(scale)x.png"
+                guard let url = renders[item.nodeId] else { return nil }
+                let filename = AssetNameRewriter.fileName(renamed: item.finalName, scale: scale)
                 let dest = outputDir.appendingPathComponent(filename)
                 return DownloadJob(
-                    asset: item.asset,
+                    asset: item,
                     finalName: item.finalName,
                     scale: scale,
                     url: url,
@@ -91,7 +102,7 @@ public struct AssetExporter: Sendable {
 
             let missingIds = Set(ids).subtracting(renders.keys)
             for missingId in missingIds {
-                if let asset = resolved.first(where: { $0.asset.nodeId == missingId })?.asset {
+                if let asset = resolved.first(where: { $0.nodeId == missingId }) {
                     errors.append(ExportFailure(
                         figmaName: asset.figmaName,
                         reason: "Figma không trả URL cho scale \(scale)"
@@ -109,21 +120,40 @@ public struct AssetExporter: Sendable {
             }
         }
 
+        let assetCatalogImport: AssetCatalogImportSummary?
+        if let assetCatalogDir {
+            assetCatalogImport = try assetCatalogWriter.importIcons(
+                assets: resolved,
+                scales: scales,
+                sourceDir: outputDir,
+                assetCatalogDir: assetCatalogDir,
+                overwrite: overwrite
+            )
+        } else {
+            assetCatalogImport = nil
+        }
+
         return ExportSummary(
             savedFiles: saved,
             skipped: skipped,
             errors: errors,
-            warnings: scan.warnings
+            warnings: scan.warnings,
+            assetCatalogImport: assetCatalogImport
         )
     }
 
-    private func resolveCollisions(_ matches: [FoundAsset]) -> [ResolvedAsset] {
+    private func resolveCollisions(_ matches: [FoundAsset]) -> [ResolvedExportedAsset] {
         var counts: [String: Int] = [:]
         return matches.map { asset in
             let count = counts[asset.renamed, default: 0] + 1
             counts[asset.renamed] = count
             let finalName = count == 1 ? asset.renamed : "\(asset.renamed)_\(count)"
-            return ResolvedAsset(asset: asset, finalName: finalName)
+            return ResolvedExportedAsset(
+                nodeId: asset.nodeId,
+                figmaName: asset.figmaName,
+                kind: asset.kind,
+                finalName: finalName
+            )
         }
     }
 
@@ -168,13 +198,15 @@ public struct AssetExporter: Sendable {
     }
 }
 
-private struct ResolvedAsset: Sendable {
-    let asset: FoundAsset
+struct ResolvedExportedAsset: Sendable {
+    let nodeId: String
+    let figmaName: String
+    let kind: AssetKind
     let finalName: String
 }
 
 private struct DownloadJob: Sendable {
-    let asset: FoundAsset
+    let asset: ResolvedExportedAsset
     let finalName: String
     let scale: Int
     let url: URL

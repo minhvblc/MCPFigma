@@ -18,6 +18,7 @@ Figma node (eICHome, eImageBanner, …)
 - Tải PNG ở scale `@2x` và `@3x` (bỏ `@1x`, iOS hiện đại không cần)
 - Đổi tên theo convention iOS: `eICHome` → `icAIHome@2x.png`, `eImageBanner` → `imageAIBanner@3x.png`
 - Lưu vào folder phẳng do user chỉ định (không `.xcassets`)
+- Có thể import tiếp icon vừa export vào `Assets.xcassets` của Xcode project khi caller truyền `xcodeProjectPath` hoặc `assetCatalogPath`
 - Tự handle rate limit (429), tôn trọng `Retry-After`, retry 5xx với exponential backoff
 - Tự xử lý trùng tên: `icAIHome` + `icAIHome_2` nếu có 2 node cùng tên
 - Surface warning cho tên gần-đúng-nhưng-sai (ví dụ typo `eIChome` lowercase)
@@ -126,6 +127,7 @@ Preview: liệt kê asset sẽ export, không tải file.
 ### `figma_export_assets`
 
 Tải về PNG `@2x` + `@3x`, lưu vào `outputDir`.
+Nếu truyền thêm `xcodeProjectPath` hoặc `assetCatalogPath`, MCP sẽ import các icon vào `.xcassets` dưới dạng `.imageset`.
 
 **Input**:
 ```json
@@ -133,6 +135,7 @@ Tải về PNG `@2x` + `@3x`, lưu vào `outputDir`.
   "fileKey": "ABC123xyz",
   "nodeId": "1:2",
   "outputDir": "/Users/you/Projects/MyApp/Resources",
+  "xcodeProjectPath": "/Users/you/Projects/MyApp/MyApp.xcodeproj",
   "nodeIds": ["1:3", "1:4"],
   "scales": [2, 3],
   "overwrite": true
@@ -142,6 +145,8 @@ Tải về PNG `@2x` + `@3x`, lưu vào `outputDir`.
 - `nodeIds` (tùy chọn): chỉ export subset, nếu bỏ qua thì export tất cả matches
 - `scales` (tùy chọn): mặc định `[2, 3]`
 - `overwrite` (tùy chọn): mặc định `true`
+- `xcodeProjectPath` (tùy chọn): đường dẫn tới `.xcodeproj`, `.xcworkspace` hoặc root project để MCP tự resolve `Assets.xcassets`
+- `assetCatalogPath` (tùy chọn): đường dẫn trực tiếp tới `.xcassets`; dùng khi project có nhiều catalog
 
 **Output**:
 ```json
@@ -152,7 +157,16 @@ Tải về PNG `@2x` + `@3x`, lưu vào `outputDir`.
   ],
   "skipped": [],
   "errors": [],
-  "warnings": []
+  "warnings": [],
+  "assetCatalog": {
+    "catalogPath": "/Users/you/Projects/MyApp/MyApp/Assets.xcassets",
+    "savedFiles": [
+      { "figmaName": "eICHome", "exportName": "icAIHome", "scale": 2, "path": "/.../Assets.xcassets/icAIHome.imageset/icAIHome@2x.png" },
+      { "figmaName": "eICHome", "exportName": "icAIHome", "scale": 3, "path": "/.../Assets.xcassets/icAIHome.imageset/icAIHome@3x.png" }
+    ],
+    "skipped": [],
+    "errors": []
+  }
 }
 ```
 
@@ -166,9 +180,9 @@ Claude sẽ gọi `figma_list_assets` và trả về danh sách matches + warnin
 
 Tiếp theo:
 
-> Export tất cả về `/Users/me/Projects/MyApp/Resources`
+> Export tất cả về `/Users/me/Projects/MyApp/Resources` và add icon vào project `/Users/me/Projects/MyApp/MyApp.xcodeproj`
 
-Claude gọi `figma_export_assets`, trả về danh sách file đã lưu. Sau đó chỉ việc kéo folder vào Xcode (hoặc dùng `Add Files to "Project"`). Trong SwiftUI:
+Claude/Codex gọi `figma_export_assets`, trả về danh sách file đã lưu và nếu có `xcodeProjectPath`/`assetCatalogPath` thì icon đã được import thẳng vào asset catalog. Trong SwiftUI:
 
 ```swift
 Image("icAIHome")
@@ -197,7 +211,7 @@ Hoặc click phải vào frame → **Copy link** → parse cùng cách. Node ID 
 swift test
 ```
 
-32 tests chạy qua 5 suite: `AssetNameRewriter`, `AssetScanner`, `RetryPolicy`, `FigmaClient` (URLProtocol mock), `AssetExporter` (fake API).
+37 tests chạy qua 7 suite: `AssetNameRewriter`, `AssetScanner`, `RetryPolicy`, `FigmaClient` (URLProtocol mock), `AssetExporter` (fake API), `AssetCatalogResolver`, `AssetCatalogWriter`.
 
 ### Cấu trúc project
 
@@ -213,7 +227,9 @@ MCPFigma/
 │   │   ├── Domain/
 │   │   │   ├── AssetNameRewriter.swift  # eIC*/eImage* → icAI*/imageAI*
 │   │   │   ├── AssetScanner.swift       # duyệt cây, dừng ở prefix match
-│   │   │   └── AssetExporter.swift      # orchestrate render + download + save
+│   │   │   ├── AssetExporter.swift      # orchestrate render + download + save
+│   │   │   ├── AssetCatalogResolver.swift # resolve .xcassets từ project path
+│   │   │   └── AssetCatalogWriter.swift   # import icon vào .imageset + Contents.json
 │   │   └── Utils/
 │   │       └── RetryPolicy.swift        # exponential backoff + Retry-After
 │   └── MCPFigmaServer/             # Executable — wire MCP SDK với Core
@@ -226,7 +242,9 @@ MCPFigma/
     ├── AssetScannerTests.swift
     ├── RetryPolicyTests.swift
     ├── FigmaClientTests.swift
-    └── AssetExporterTests.swift
+    ├── AssetExporterTests.swift
+    ├── AssetCatalogResolverTests.swift
+    └── AssetCatalogWriterTests.swift
 ```
 
 ### Debug MCP protocol thủ công
@@ -248,6 +266,7 @@ MCPFigma/
 | `Figma API lỗi: forbidden` | Token không có quyền đọc file | Đảm bảo token có scope *File content read* và file thuộc workspace có quyền |
 | `Figma API lỗi: notFound` | `fileKey` hoặc `nodeId` sai | Verify lại URL Figma, `nodeId` dùng dấu `:` không phải `-` |
 | Không có file nào được tải | Không có asset nào match prefix `eIC*`/`eImage*` | Check warnings trong output, hoặc rename trên Figma cho đúng |
+| Lỗi cần chỉ rõ `assetCatalogPath` | Project có nhiều `.xcassets` | Truyền thẳng `assetCatalogPath` thay vì chỉ `xcodeProjectPath` |
 | Claude không thấy tool | Claude chưa restart sau khi thêm config | Cmd+Q rồi mở lại Claude |
 
 ## Architecture

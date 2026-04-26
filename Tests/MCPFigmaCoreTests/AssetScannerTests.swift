@@ -77,8 +77,8 @@ struct AssetScannerTests {
         #expect(result.matches.first?.renamed == "icAIDeep")
     }
 
-    @Test("Invalid-prefix node (eIChome lowercase) emits warning and does NOT recurse")
-    func invalidPrefixEmitsWarningAndStops() {
+    @Test("Invalid-prefix node emits warning but still scans valid descendants")
+    func invalidPrefixWarnsAndStillRecurses() {
         let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
             FigmaNode(id: "2", name: "eIChome", type: "FRAME", children: [
                 FigmaNode(id: "3", name: "eICInside", type: "FRAME", children: nil)
@@ -87,10 +87,30 @@ struct AssetScannerTests {
 
         let result = scanner.scan(root)
 
-        #expect(result.matches.isEmpty)
+        #expect(result.matches.count == 1)
+        #expect(result.matches.first?.nodeId == "3")
+        #expect(result.matches.first?.renamed == "icAIInside")
         #expect(result.warnings.count == 1)
         #expect(result.warnings.first?.nodeId == "2")
         #expect(result.warnings.first?.figmaName == "eIChome")
+    }
+
+    @Test("Invalid eImage container still allows nested exportable image")
+    func invalidImageContainerStillRecurses() {
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "eImage", type: "FRAME", children: [
+                FigmaNode(id: "3", name: "eImageBanner", type: "FRAME", children: nil)
+            ])
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.count == 1)
+        #expect(result.matches.first?.nodeId == "3")
+        #expect(result.matches.first?.kind == .image)
+        #expect(result.matches.first?.renamed == "imageAIBanner")
+        #expect(result.warnings.count == 1)
+        #expect(result.warnings.first?.nodeId == "2")
     }
 
     @Test("Illegal-char node (eICHome-2) emits warning")

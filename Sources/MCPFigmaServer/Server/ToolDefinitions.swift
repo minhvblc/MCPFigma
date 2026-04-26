@@ -34,7 +34,8 @@ enum ToolDefinitions {
         name: "figma_export_assets",
         description: """
         Tải các asset eIC*/eImage* trong một node Figma về thư mục đích dưới dạng PNG \
-        @2x và @3x, đổi tên theo convention iOS (icAI*/imageAI*). Trả về danh sách file đã lưu.
+        @2x và @3x, đổi tên theo convention iOS (icAI*/imageAI*). Nếu truyền \
+        xcodeProjectPath hoặc assetCatalogPath thì icon export xong sẽ được import vào .xcassets.
         """,
         inputSchema: .object([
             "type": .string("object"),
@@ -51,6 +52,14 @@ enum ToolDefinitions {
                 "outputDir": .object([
                     "type": .string("string"),
                     "description": .string("Đường dẫn tuyệt đối thư mục đích. Sẽ tự tạo nếu chưa có.")
+                ]),
+                "xcodeProjectPath": .object([
+                    "type": .string("string"),
+                    "description": .string("Tùy chọn: đường dẫn tuyệt đối tới .xcodeproj, .xcworkspace hoặc thư mục gốc project để tự resolve .xcassets.")
+                ]),
+                "assetCatalogPath": .object([
+                    "type": .string("string"),
+                    "description": .string("Tùy chọn: đường dẫn tuyệt đối trực tiếp tới .xcassets cần import icon vào.")
                 ]),
                 "nodeIds": .object([
                     "type": .string("array"),

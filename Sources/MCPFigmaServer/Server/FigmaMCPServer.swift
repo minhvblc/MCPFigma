@@ -112,6 +112,8 @@ struct FigmaMCPServer: Sendable {
         guard outputDirString.hasPrefix("/") else {
             return errorResult("'outputDir' phải là đường dẫn tuyệt đối, nhận được: \(outputDirString)")
         }
+        let assetCatalogPath = args["assetCatalogPath"]?.stringValue
+        let xcodeProjectPath = args["xcodeProjectPath"]?.stringValue
 
         let scales: [Int] = {
             if let raw = args["scales"]?.arrayValue {
@@ -126,6 +128,10 @@ struct FigmaMCPServer: Sendable {
             let ids = raw.compactMap { $0.stringValue }
             return ids.isEmpty ? nil : Set(ids)
         }()
+        let assetCatalogDir = try AssetCatalogResolver().resolve(
+            assetCatalogPath: assetCatalogPath,
+            xcodeProjectPath: xcodeProjectPath
+        )
 
         let exporter = AssetExporter(api: api, scanner: scanner)
         let summary = try await exporter.export(
@@ -134,7 +140,8 @@ struct FigmaMCPServer: Sendable {
             outputDir: URL(fileURLWithPath: outputDirString, isDirectory: true),
             scales: scales,
             overwrite: overwrite,
-            selectedNodeIds: selectedIds
+            selectedNodeIds: selectedIds,
+            assetCatalogDir: assetCatalogDir
         )
 
         let payload = ExportSummaryOutput(
@@ -163,11 +170,35 @@ struct FigmaMCPServer: Sendable {
                     figmaName: $0.figmaName,
                     reason: $0.reason
                 )
+            },
+            assetCatalog: summary.assetCatalogImport.map {
+                ExportSummaryOutput.AssetCatalogImport(
+                    catalogPath: $0.catalogPath,
+                    savedFiles: $0.savedFiles.map {
+                        ExportSummaryOutput.SavedFile(
+                            figmaName: $0.figmaName,
+                            exportName: $0.renamed,
+                            scale: $0.scale,
+                            path: $0.path
+                        )
+                    },
+                    skipped: $0.skipped.map {
+                        ExportSummaryOutput.SavedFile(
+                            figmaName: $0.figmaName,
+                            exportName: $0.renamed,
+                            scale: $0.scale,
+                            path: $0.path
+                        )
+                    },
+                    errors: $0.errors.map {
+                        ExportSummaryOutput.Failure(figmaName: $0.figmaName, reason: $0.reason)
+                    }
+                )
             }
         )
         return .init(
             content: [text(try JSONOutput.encode(payload))],
-            isError: !summary.errors.isEmpty
+            isError: !summary.errors.isEmpty || !(summary.assetCatalogImport?.errors.isEmpty ?? true)
         )
     }
 
@@ -219,10 +250,17 @@ struct ExportSummaryOutput: Encodable {
         let figmaName: String
         let reason: String
     }
+    struct AssetCatalogImport: Encodable {
+        let catalogPath: String
+        let savedFiles: [SavedFile]
+        let skipped: [SavedFile]
+        let errors: [Failure]
+    }
     let savedFiles: [SavedFile]
     let skipped: [SavedFile]
     let errors: [Failure]
     let warnings: [Warning]
+    let assetCatalog: AssetCatalogImport?
 }
 
 enum JSONOutput {

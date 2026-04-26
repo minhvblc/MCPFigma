@@ -1,6 +1,6 @@
 import Foundation
 
-public enum AssetKind: Sendable, Equatable {
+public enum AssetKind: Sendable, Equatable, Hashable {
     case icon
     case image
 }
