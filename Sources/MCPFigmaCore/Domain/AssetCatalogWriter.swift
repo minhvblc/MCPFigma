@@ -6,18 +6,48 @@ struct AssetCatalogWriter: Sendable {
         scales: [Int],
         sourceDir: URL,
         assetCatalogDir: URL,
+        screenName: String,
         overwrite: Bool
     ) throws -> AssetCatalogImportSummary {
         try FileManager.default.createDirectory(at: assetCatalogDir, withIntermediateDirectories: true)
 
-        let icons = assets.filter { $0.kind == .icon }
+        let existing = scanExistingImagesets(in: assetCatalogDir)
+        let groupDir = makeGroupDir(catalog: assetCatalogDir, screenName: screenName)
+        var groupDirEnsured = groupDir == assetCatalogDir
+
         var saved: [SavedFile] = []
         var skipped: [SavedFile] = []
         var errors: [ExportFailure] = []
 
-        for asset in icons {
-            let imagesetDir = assetCatalogDir.appendingPathComponent("\(asset.finalName).imageset", isDirectory: true)
-            try FileManager.default.createDirectory(at: imagesetDir, withIntermediateDirectories: true)
+        for asset in assets {
+            let imagesetDir: URL
+            if let existingURL = existing[asset.finalName] {
+                imagesetDir = existingURL
+            } else {
+                if !groupDirEnsured {
+                    do {
+                        try ensureGroupDir(groupDir)
+                        groupDirEnsured = true
+                    } catch {
+                        errors.append(ExportFailure(
+                            figmaName: asset.figmaName,
+                            reason: "Không tạo được group folder \(groupDir.path): \(error)"
+                        ))
+                        continue
+                    }
+                }
+                imagesetDir = groupDir.appendingPathComponent("\(asset.finalName).imageset", isDirectory: true)
+            }
+
+            do {
+                try FileManager.default.createDirectory(at: imagesetDir, withIntermediateDirectories: true)
+            } catch {
+                errors.append(ExportFailure(
+                    figmaName: asset.figmaName,
+                    reason: "Không tạo được imageset \(imagesetDir.path): \(error)"
+                ))
+                continue
+            }
 
             let contentsURL = imagesetDir.appendingPathComponent("Contents.json")
             var contents = loadContents(from: contentsURL)
@@ -76,6 +106,74 @@ struct AssetCatalogWriter: Sendable {
             skipped: skipped,
             errors: errors
         )
+    }
+
+    func scanExistingImagesets(in catalog: URL) -> [String: URL] {
+        guard FileManager.default.fileExists(atPath: catalog.path),
+              let enumerator = FileManager.default.enumerator(
+                at: catalog,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return [:]
+        }
+        var result: [String: URL] = [:]
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "imageset" else { continue }
+            var isDir = ObjCBool(false)
+            FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+            guard isDir.boolValue else { continue }
+            let name = url.deletingPathExtension().lastPathComponent
+            if result[name] == nil {
+                result[name] = url
+            }
+            enumerator.skipDescendants()
+        }
+        return result
+    }
+
+    private func makeGroupDir(catalog: URL, screenName: String) -> URL {
+        let sanitized = sanitizeFolderName(screenName)
+        guard !sanitized.isEmpty else { return catalog }
+        return catalog.appendingPathComponent(sanitized, isDirectory: true)
+    }
+
+    private func ensureGroupDir(_ url: URL) throws {
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let contentsURL = url.appendingPathComponent("Contents.json")
+        guard !FileManager.default.fileExists(atPath: contentsURL.path) else { return }
+        let payload: [String: Any] = [
+            "info": ["author": "xcode", "version": 1]
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: payload,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try data.write(to: contentsURL)
+    }
+
+    private func sanitizeFolderName(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forbidden: Set<Character> = ["/", "\\", ":", "*", "?", "\"", "<", ">", "|"]
+        var output = ""
+        var lastWasSeparator = false
+        for char in trimmed {
+            if let ascii = char.asciiValue, ascii < 0x20 { continue }
+            if forbidden.contains(char) { continue }
+            if char.isWhitespace {
+                if !output.isEmpty, !lastWasSeparator {
+                    output.append("_")
+                    lastWasSeparator = true
+                }
+                continue
+            }
+            output.append(char)
+            lastWasSeparator = false
+        }
+        while output.hasSuffix("_") || output.hasSuffix(".") {
+            output.removeLast()
+        }
+        return output
     }
 
     private func loadContents(from url: URL) -> AssetCatalogContents {

@@ -55,6 +55,9 @@ public struct AssetScanner: Sendable {
         matches: inout [FoundAsset],
         warnings: inout [ScanWarning]
     ) {
+        if AssetNameRewriter.isSkippedSubtree(node.name) {
+            return
+        }
         do {
             let result = try rewriter.rewrite(node.name)
             matches.append(FoundAsset(

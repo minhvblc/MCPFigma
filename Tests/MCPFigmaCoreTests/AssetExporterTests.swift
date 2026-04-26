@@ -189,6 +189,53 @@ struct AssetExporterTests {
         #expect(summary.warnings.first?.figmaName == "eIChome")
     }
 
+    @Test("skipIfExistsInCatalog skips download when imageset đã có trong catalog")
+    func skipsWhenAlreadyInCatalog() async throws {
+        let root = FigmaNode(id: "root", name: "HomeScreen", type: "CANVAS", children: [
+            FigmaNode(id: "a", name: "eICHome", type: "FRAME", children: nil),
+            FigmaNode(id: "b", name: "eICNew", type: "FRAME", children: nil)
+        ])
+        let fake = FakeFigmaAPI(
+            nodes: makeResponse(rootId: "root", node: root),
+            imagesByScale: [2: ["b": URL(string: "https://cdn/b.png")!]],
+            downloads: [URL(string: "https://cdn/b.png")!: Data([0xBB])]
+        )
+        let workRoot = tempDir()
+        let out = workRoot.appendingPathComponent("Exports", isDirectory: true)
+        let catalog = workRoot.appendingPathComponent("Assets.xcassets", isDirectory: true)
+        let existingImageset = catalog
+            .appendingPathComponent("OldFolder/icAIHome.imageset", isDirectory: true)
+        try FileManager.default.createDirectory(at: existingImageset, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workRoot) }
+
+        let exporter = AssetExporter(api: fake)
+        let summary = try await exporter.export(
+            fileKey: "k",
+            rootNodeId: "root",
+            outputDir: out,
+            scales: [2],
+            assetCatalogDir: catalog,
+            skipIfExistsInCatalog: true
+        )
+
+        // icAIHome đã có sẵn → skipped, không download (file PNG không tồn tại trong outputDir)
+        let savedNames = Set(summary.savedFiles.map { $0.renamed })
+        let skippedNames = Set(summary.skipped.map { $0.renamed })
+        #expect(savedNames == ["icAINew"])
+        #expect(skippedNames == ["icAIHome"])
+        #expect(!FileManager.default.fileExists(
+            atPath: out.appendingPathComponent("icAIHome@2x.png").path
+        ))
+        #expect(FileManager.default.fileExists(
+            atPath: out.appendingPathComponent("icAINew@2x.png").path
+        ))
+        // icAINew là asset mới → đặt trong screen folder HomeScreen
+        let newImageset = catalog.appendingPathComponent("HomeScreen/icAINew.imageset", isDirectory: true)
+        #expect(FileManager.default.fileExists(
+            atPath: newImageset.appendingPathComponent("icAINew@2x.png").path
+        ))
+    }
+
     private func makeResponse(rootId: String, node: FigmaNode) -> FigmaFileNodesResponse {
         let json = """
         { "name": "Test", "nodes": { "\(rootId)": { "document": \(nodeJSON(node)) } } }

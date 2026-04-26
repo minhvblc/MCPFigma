@@ -123,6 +123,7 @@ struct FigmaMCPServer: Sendable {
             return [2, 3]
         }()
         let overwrite = args["overwrite"]?.boolValue ?? true
+        let skipIfExistsInCatalog = args["skipIfExistsInCatalog"]?.boolValue ?? true
         let selectedIds: Set<String>? = {
             guard let raw = args["nodeIds"]?.arrayValue else { return nil }
             let ids = raw.compactMap { $0.stringValue }
@@ -141,7 +142,8 @@ struct FigmaMCPServer: Sendable {
             scales: scales,
             overwrite: overwrite,
             selectedNodeIds: selectedIds,
-            assetCatalogDir: assetCatalogDir
+            assetCatalogDir: assetCatalogDir,
+            skipIfExistsInCatalog: skipIfExistsInCatalog
         )
 
         let payload = ExportSummaryOutput(

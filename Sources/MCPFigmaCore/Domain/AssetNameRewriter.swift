@@ -16,8 +16,15 @@ public struct AssetNameRewriter: Sendable {
     private static let imagePrefix = "eImage"
     private static let iconReplacement = "icAI"
     private static let imageReplacement = "imageAI"
+    private static let skipPrefix = "eAnim"
 
     public init() {}
+
+    public static func isSkippedSubtree(_ figmaName: String) -> Bool {
+        figmaName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .hasPrefix(skipPrefix)
+    }
 
     public func rewrite(_ figmaName: String) throws -> (kind: AssetKind, renamed: String) {
         let trimmed = figmaName.trimmingCharacters(in: .whitespacesAndNewlines)

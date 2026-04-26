@@ -8,6 +8,7 @@ enum ToolDefinitions {
         name: "figma_list_assets",
         description: """
         Liệt kê các asset có prefix eIC* (icon) hoặc eImage* (image) trong một node Figma. \
+        Node có prefix eAnim* (Lottie placeholder) sẽ bị bỏ qua, không đào sâu vào con. \
         Không tải file — chỉ preview để người dùng confirm trước khi export.
         """,
         inputSchema: .object([
@@ -34,8 +35,11 @@ enum ToolDefinitions {
         name: "figma_export_assets",
         description: """
         Tải các asset eIC*/eImage* trong một node Figma về thư mục đích dưới dạng PNG \
-        @2x và @3x, đổi tên theo convention iOS (icAI*/imageAI*). Nếu truyền \
-        xcodeProjectPath hoặc assetCatalogPath thì icon export xong sẽ được import vào .xcassets.
+        @2x và @3x, đổi tên theo convention iOS (icAI*/imageAI*). Node có prefix \
+        eAnim* (Lottie placeholder) sẽ bị bỏ qua, không đào sâu vào con. Nếu truyền \
+        xcodeProjectPath hoặc assetCatalogPath thì asset export xong sẽ được import \
+        vào .xcassets, nhóm theo folder mang tên màn (root node). Mặc định bỏ qua \
+        các imageset đã tồn tại sẵn trong catalog (đặt skipIfExistsInCatalog=false để re-import).
         """,
         inputSchema: .object([
             "type": .string("object"),
@@ -74,6 +78,10 @@ enum ToolDefinitions {
                 "overwrite": .object([
                     "type": .string("boolean"),
                     "description": .string("Ghi đè file sẵn có, mặc định true.")
+                ]),
+                "skipIfExistsInCatalog": .object([
+                    "type": .string("boolean"),
+                    "description": .string("Nếu imageset đã tồn tại trong .xcassets (bất kỳ folder con nào) thì bỏ qua hẳn, không download/import lại. Mặc định true.")
                 ])
             ])
         ])

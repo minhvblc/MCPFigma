@@ -52,7 +52,8 @@ public struct AssetExporter: Sendable {
         scales: [Int] = [2, 3],
         overwrite: Bool = true,
         selectedNodeIds: Set<String>? = nil,
-        assetCatalogDir: URL? = nil
+        assetCatalogDir: URL? = nil,
+        skipIfExistsInCatalog: Bool = false
     ) async throws -> ExportSummary {
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
@@ -60,6 +61,7 @@ public struct AssetExporter: Sendable {
         guard let root = response.nodes[rootNodeId]?.document else {
             throw FigmaAPIError.notFound
         }
+        let screenName = root.name
 
         let scan = scanner.scan(root)
         let targets = selectedNodeIds.map { selected in
@@ -72,13 +74,42 @@ public struct AssetExporter: Sendable {
         var skipped: [SavedFile] = []
         var errors: [ExportFailure] = []
 
+        let existingInCatalog: [String: URL] = {
+            guard let assetCatalogDir, skipIfExistsInCatalog else { return [:] }
+            return assetCatalogWriter.scanExistingImagesets(in: assetCatalogDir)
+        }()
+
+        let toExport: [ResolvedExportedAsset]
+        if !existingInCatalog.isEmpty {
+            var filtered: [ResolvedExportedAsset] = []
+            for asset in resolved {
+                if let existingURL = existingInCatalog[asset.finalName] {
+                    for scale in scales {
+                        let filename = AssetNameRewriter.fileName(renamed: asset.finalName, scale: scale)
+                        skipped.append(SavedFile(
+                            figmaName: asset.figmaName,
+                            renamed: asset.finalName,
+                            scale: scale,
+                            path: existingURL.appendingPathComponent(filename).path
+                        ))
+                    }
+                } else {
+                    filtered.append(asset)
+                }
+            }
+            toExport = filtered
+        } else {
+            toExport = resolved
+        }
+
         for scale in scales {
-            let ids = resolved.map(\.nodeId)
+            let ids = toExport.map(\.nodeId)
+            guard !ids.isEmpty else { break }
             let renders: [String: URL]
             do {
                 renders = try await api.renderImages(fileKey: fileKey, nodeIds: ids, scale: scale)
             } catch {
-                for item in resolved {
+                for item in toExport {
                     errors.append(ExportFailure(
                         figmaName: item.figmaName,
                         reason: "renderImages(scale: \(scale)) lỗi: \(error)"
@@ -87,7 +118,7 @@ public struct AssetExporter: Sendable {
                 continue
             }
 
-            let jobs: [DownloadJob] = resolved.compactMap { item in
+            let jobs: [DownloadJob] = toExport.compactMap { item in
                 guard let url = renders[item.nodeId] else { return nil }
                 let filename = AssetNameRewriter.fileName(renamed: item.finalName, scale: scale)
                 let dest = outputDir.appendingPathComponent(filename)
@@ -102,7 +133,7 @@ public struct AssetExporter: Sendable {
 
             let missingIds = Set(ids).subtracting(renders.keys)
             for missingId in missingIds {
-                if let asset = resolved.first(where: { $0.nodeId == missingId }) {
+                if let asset = toExport.first(where: { $0.nodeId == missingId }) {
                     errors.append(ExportFailure(
                         figmaName: asset.figmaName,
                         reason: "Figma không trả URL cho scale \(scale)"
@@ -123,10 +154,11 @@ public struct AssetExporter: Sendable {
         let assetCatalogImport: AssetCatalogImportSummary?
         if let assetCatalogDir {
             assetCatalogImport = try assetCatalogWriter.importIcons(
-                assets: resolved,
+                assets: toExport,
                 scales: scales,
                 sourceDir: outputDir,
                 assetCatalogDir: assetCatalogDir,
+                screenName: screenName,
                 overwrite: overwrite
             )
         } else {

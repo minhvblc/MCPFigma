@@ -127,6 +127,24 @@ struct AssetScannerTests {
         #expect(result.warnings.first?.reason.contains("không cho phép") == true)
     }
 
+    @Test("eAnim node is skipped without recursing into children")
+    func eAnimSkipsSubtree() {
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "eAnimSplash", type: "FRAME", children: [
+                FigmaNode(id: "3", name: "eICShouldBeIgnored", type: "VECTOR", children: nil),
+                FigmaNode(id: "4", name: "eImageAlsoIgnored", type: "FRAME", children: nil)
+            ]),
+            FigmaNode(id: "5", name: "eICOutside", type: "FRAME", children: nil)
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.count == 1)
+        #expect(result.matches.first?.nodeId == "5")
+        #expect(result.matches.first?.renamed == "icAIOutside")
+        #expect(result.warnings.isEmpty)
+    }
+
     @Test("Mixed valid + invalid produces both matches and warnings")
     func mixedMatchesAndWarnings() {
         let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
