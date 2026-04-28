@@ -2,7 +2,13 @@ import Foundation
 import MCP
 
 enum ToolDefinitions {
-    static let all: [Tool] = [listAssets, exportAssets]
+    static let all: [Tool] = [
+        listAssets,
+        exportAssets,
+        buildRegistry,
+        exportAssetsUnified,
+        extractTokens
+    ]
 
     static let listAssets = Tool(
         name: "figma_list_assets",
@@ -82,6 +88,134 @@ enum ToolDefinitions {
                 "skipIfExistsInCatalog": .object([
                     "type": .string("boolean"),
                     "description": .string("Nếu imageset đã tồn tại trong .xcassets (bất kỳ folder con nào) thì bỏ qua hẳn, không download/import lại. Mặc định true.")
+                ])
+            ])
+        ])
+    )
+
+    static let buildRegistry = Tool(
+        name: "figma_build_registry",
+        description: """
+        Trả về registry tổng hợp cho 1 node Figma trong 1 lần gọi: \
+        (1) screens — danh sách FRAME giống màn iOS (children trực tiếp của root); \
+        (2) taggedAssets — eIC*/eImage* đã đổi tên iOS (icAI*/imageAI*); \
+        (3) lottiePlaceholders — eAnim* với kích thước frame; \
+        (4) warnings cho tên không hợp lệ. Skill dùng output này thay cho việc gọi \
+        figma_list_assets + walk metadata.json riêng lẻ.
+        """,
+        inputSchema: .object([
+            "type": .string("object"),
+            "required": .array([.string("fileKey"), .string("nodeId")]),
+            "properties": .object([
+                "fileKey": .object([
+                    "type": .string("string"),
+                    "description": .string("Figma file key.")
+                ]),
+                "nodeId": .object([
+                    "type": .string("string"),
+                    "description": .string("Node ID root cần quét, dạng 123:456.")
+                ]),
+                "depth": .object([
+                    "type": .string("integer"),
+                    "description": .string("Độ sâu tối đa khi fetch cây. Mặc định 10.")
+                ])
+            ])
+        ])
+    )
+
+    static let exportAssetsUnified = Tool(
+        name: "figma_export_assets_unified",
+        description: """
+        Export pipeline thống nhất cho mọi loại asset trong 1 lần gọi. Mỗi row \
+        khai báo exporter='tagged' (eIC*/eImage*, đi xcassets pipeline với @2x/@3x) \
+        hoặc exporter='fallback' (untagged hoặc FLATTEN region, render qua /v1/images \
+        scale 3, dedupe vào sharedAssetsDir, validate PNG signature). Tagged row bị \
+        render lỗi sẽ tự động chuyển sang fallback. Lottie placeholder (strategy= \
+        'lottiePlaceholder') được pass-through, không download. Trả manifest đầy đủ \
+        per-row để skill chỉ việc ghi xuống manifest.json.
+        """,
+        inputSchema: .object([
+            "type": .string("object"),
+            "required": .array([.string("fileKey"), .string("nodeId"), .string("outputDir"), .string("sharedAssetsDir"), .string("rows")]),
+            "properties": .object([
+                "fileKey": .object([
+                    "type": .string("string"),
+                    "description": .string("Figma file key.")
+                ]),
+                "nodeId": .object([
+                    "type": .string("string"),
+                    "description": .string("Root node — dùng để fetch tree cho phần tagged.")
+                ]),
+                "outputDir": .object([
+                    "type": .string("string"),
+                    "description": .string("Đường dẫn tuyệt đối: thư mục output cho tagged path. Tagged PNG được lưu ở outputDir/_mcpfigma/ rồi copy sang xcassets.")
+                ]),
+                "sharedAssetsDir": .object([
+                    "type": .string("string"),
+                    "description": .string("Đường dẫn tuyệt đối: thư mục chia sẻ cho fallback path (dedup theo nodeId).")
+                ]),
+                "assetCatalogPath": .object([
+                    "type": .string("string"),
+                    "description": .string("Tùy chọn: .xcassets path để import imageset cho tagged row.")
+                ]),
+                "rows": .object([
+                    "type": .string("array"),
+                    "description": .string("Mỗi phần tử: { nodeId, exporter ('tagged'|'fallback'), exportName?, friendlyName?, strategy ('atomic'|'flatten'|'lottiePlaceholder', mặc định 'atomic') }."),
+                    "items": .object([
+                        "type": .string("object"),
+                        "required": .array([.string("nodeId"), .string("exporter")]),
+                        "properties": .object([
+                            "nodeId": .object(["type": .string("string")]),
+                            "exporter": .object([
+                                "type": .string("string"),
+                                "enum": .array([.string("tagged"), .string("fallback")])
+                            ]),
+                            "exportName": .object(["type": .string("string")]),
+                            "friendlyName": .object(["type": .string("string")]),
+                            "strategy": .object([
+                                "type": .string("string"),
+                                "enum": .array([.string("atomic"), .string("flatten"), .string("lottiePlaceholder")])
+                            ])
+                        ])
+                    ])
+                ]),
+                "scales": .object([
+                    "type": .string("array"),
+                    "items": .object(["type": .string("integer")]),
+                    "description": .string("Scale cho tagged path, mặc định [2, 3].")
+                ]),
+                "fallbackScale": .object([
+                    "type": .string("integer"),
+                    "description": .string("Scale cho fallback path, mặc định 3.")
+                ]),
+                "overwrite": .object([
+                    "type": .string("boolean"),
+                    "description": .string("Ghi đè file sẵn có, mặc định true.")
+                ]),
+                "skipIfExistsInCatalog": .object([
+                    "type": .string("boolean"),
+                    "description": .string("Bỏ qua tagged row có imageset đã tồn tại sẵn, mặc định true.")
+                ])
+            ])
+        ])
+    )
+
+    static let extractTokens = Tool(
+        name: "figma_extract_tokens",
+        description: """
+        Đọc Figma local variables và map sang SwiftUI naming convention. Trả về \
+        colors (lightHex/darkHex theo mode), spacing, radius (đánh dấu isCapsule \
+        cho value >= 999), opacity, other. Tên Figma 'primary/500' → swiftName \
+        'primary500'; 'spacing/md' → swiftName 'md' (drop leading segment cho \
+        spacing/radius/opacity). Yêu cầu Figma plan có Variables API.
+        """,
+        inputSchema: .object([
+            "type": .string("object"),
+            "required": .array([.string("fileKey")]),
+            "properties": .object([
+                "fileKey": .object([
+                    "type": .string("string"),
+                    "description": .string("Figma file key.")
                 ])
             ])
         ])

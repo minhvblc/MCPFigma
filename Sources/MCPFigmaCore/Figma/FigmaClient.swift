@@ -17,6 +17,7 @@ public protocol FigmaAPI: Sendable {
     func fetchNodes(fileKey: String, nodeId: String, depth: Int?) async throws -> FigmaFileNodesResponse
     func renderImages(fileKey: String, nodeIds: [String], scale: Int) async throws -> [String: URL]
     func download(_ url: URL) async throws -> Data
+    func fetchVariables(fileKey: String) async throws -> FigmaVariablesResponse
 }
 
 public struct FigmaClient: FigmaAPI {
@@ -64,6 +65,16 @@ public struct FigmaClient: FigmaAPI {
             }
         }
         return combined
+    }
+
+    public func fetchVariables(fileKey: String) async throws -> FigmaVariablesResponse {
+        let url = FigmaEndpoints.variablesLocal(fileKey: fileKey)
+        let data = try await performJSON(url: url)
+        do {
+            return try JSONDecoder().decode(FigmaVariablesResponse.self, from: data)
+        } catch {
+            throw FigmaAPIError.invalidResponse
+        }
     }
 
     public func download(_ url: URL) async throws -> Data {

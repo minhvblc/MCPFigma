@@ -28,4 +28,8 @@ public enum FigmaEndpoints {
         ]
         return components.url!
     }
+
+    public static func variablesLocal(fileKey: String) -> URL {
+        baseURL.appendingPathComponent("/v1/files/\(fileKey)/variables/local")
+    }
 }

@@ -283,4 +283,8 @@ final class FakeFigmaAPI: FigmaAPI, @unchecked Sendable {
         }
         return data
     }
+
+    func fetchVariables(fileKey: String) async throws -> FigmaVariablesResponse {
+        FigmaVariablesResponse(status: 200, error: false, message: nil, meta: nil)
+    }
 }
