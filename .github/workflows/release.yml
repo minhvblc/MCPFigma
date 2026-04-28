@@ -21,7 +21,11 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: macos-14
+    # macos-15 ships Xcode 16.x by default, which is required by
+    # swift-tools-version:6.0 in Package.swift. macos-14 only has Xcode 15.x
+    # which fails at parse time with "package manifest at '/Package.swift'
+    # cannot be opened: tools-version (6.0) is greater than ...".
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -42,8 +46,16 @@ jobs:
           sed -i '' -E "s/version: \"[0-9]+\.[0-9]+\.[0-9]+\"/version: \"${{ steps.version.outputs.version }}\"/" "$FILE"
           grep "version:" "$FILE" | head -3
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+      - name: Select latest Xcode 16+
+        # Prefer the newest Xcode 16.x or 17.x present on the runner.
+        # Falls back to the runner default Xcode.app if no versioned bundle is found.
+        run: |
+          BEST=$(ls -d /Applications/Xcode_16*.app /Applications/Xcode_17*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$BEST" ]; then
+            BEST="/Applications/Xcode.app"
+          fi
+          echo "Using $BEST"
+          sudo xcode-select -s "$BEST/Contents/Developer"
 
       - name: Show Swift version
         run: swift --version
