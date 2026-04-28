@@ -98,6 +98,8 @@ Restart Claude (Cmd+Q rồi mở lại) để nạp cấu hình.
 
 ## Tool MCP
 
+> **Khuyến nghị mạnh** — luôn dùng pipeline thống nhất (`figma_build_registry` + `figma_extract_tokens` + `figma_export_assets_unified`). Hai tool legacy `figma_list_assets` và `figma_export_assets` chỉ giữ lại để tương thích ngược; skill `figma-to-swiftui` / `figma-flow-to-swiftui-feature` **CẤM** dùng chúng vì không trả đủ artifact để chống fabrication (no `screens[]`, no `taggedAssets[]`, no `lottiePlaceholders[]`, no token `swiftName`/`lightHex`).
+
 ### `figma_list_assets`
 
 Preview: liệt kê asset sẽ export, không tải file.
@@ -172,17 +174,27 @@ Nếu truyền thêm `xcodeProjectPath` hoặc `assetCatalogPath`, MCP sẽ impo
 
 ## Cách dùng trong Claude
 
-Ví dụ prompt:
+**Pipeline khuyến nghị (3 bước, dùng cho figma-to-swiftui skill):**
 
-> Dùng mcp-figma liệt kê asset trong file `ABC123` node `1:2` cho tôi xem.
+1. Discover screen graph + tagged assets + lottie placeholders trong 1 call:
 
-Claude sẽ gọi `figma_list_assets` và trả về danh sách matches + warnings.
+   > Build registry cho Figma file `ABC123` node `1:2`.
 
-Tiếp theo:
+   Claude gọi `figma_build_registry(fileKey, nodeId, depth=10)` → trả `screens[]`, `taggedAssets[]`, `lottiePlaceholders[]`, `warnings[]`.
 
-> Export tất cả về `/Users/me/Projects/MyApp/Resources` và add icon vào project `/Users/me/Projects/MyApp/MyApp.xcodeproj`
+2. Extract design tokens (1 lần per fileKey):
 
-Claude/Codex gọi `figma_export_assets`, trả về danh sách file đã lưu và nếu có `xcodeProjectPath`/`assetCatalogPath` thì icon đã được import thẳng vào asset catalog. Trong SwiftUI:
+   > Extract tokens từ Figma file `ABC123`.
+
+   Claude gọi `figma_extract_tokens(fileKey)` → trả `colors[]`, `spacing[]`, `radii[]`, `typography[]` đã sẵn `swiftName`, `lightHex`/`darkHex`, `isCapsule` — codegen thẳng vào `DesignSystem/Color+Tokens.swift` / `AppFont.swift` / `Spacing.swift`.
+
+3. Export assets (tagged + fallback + lottie trong 1 call):
+
+   > Export assets vào project `/Users/me/Projects/MyApp/MyApp.xcodeproj`, cache `.figma-cache/1:2/assets`.
+
+   Claude gọi `figma_export_assets_unified(fileKey, nodeId, outputDir, sharedAssetsDir, assetCatalogPath, rows[])`. Tagged rows ghi thẳng `.imageset` vào `Assets.xcassets`; fallback rows render scale 3 + dedupe vào `_shared/assets/`; lottie rows pass-through (skill tự codegen `LottieView`).
+
+Trong SwiftUI:
 
 ```swift
 Image("icAIHome")
@@ -190,6 +202,8 @@ Image("imageAIBanner")
 ```
 
 Xcode tự pick `@2x` / `@3x` theo device.
+
+**Legacy (không khuyến khích):** `figma_list_assets` + `figma_export_assets` chỉ phù hợp cho script một lần / không qua skill. Khi dùng trong skill, agent sẽ thiếu screen graph / tokens / lottie info và buộc phải bịa — đã được skill chặn ở C3 Pass 1.
 
 ## Lấy Figma file key và node ID
 
