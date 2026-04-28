@@ -26,18 +26,42 @@ Figma node (eICHome, eImageBanner, …)
 ## Yêu cầu
 
 - macOS 13+ (Ventura)
-- Swift 6.0+ (Xcode 16+ hoặc toolchain đi kèm)
 - Figma Personal Access Token — tạo tại https://www.figma.com/settings, cần scope *File content read*
+- (Chỉ nếu build từ source) Swift 6.0+ — Xcode 16+ hoặc toolchain đi kèm
 
-## Cài đặt & build
+## Cài đặt
+
+### Cách 1 — Pre-built binary (khuyến nghị)
+
+Tải universal binary (arm64 + x86_64) từ [releases page](https://github.com/minhvblc/MCPFigma/releases):
 
 ```bash
-git clone <repo-url> MCPFigma
+mkdir -p ~/.local/share/mcp-figma && cd ~/.local/share/mcp-figma
+# Thay <VERSION> bằng tag mới nhất, ví dụ 0.3.0
+curl -fsSL -o mcp-figma.tar.gz \
+  https://github.com/minhvblc/MCPFigma/releases/latest/download/mcp-figma-<VERSION>-darwin-universal.tar.gz
+tar -xzf mcp-figma.tar.gz && rm mcp-figma.tar.gz
+chmod +x mcp-figma
+xattr -d com.apple.quarantine mcp-figma 2>/dev/null || true   # bypass Gatekeeper (binary unsigned)
+```
+
+Binary nằm ở `~/.local/share/mcp-figma/mcp-figma`. Verify checksum với file `.sha256` đính kèm cùng release.
+
+> **Tại sao phải `xattr`?** Binary chưa code-signing với Apple Developer ID, nên macOS Gatekeeper sẽ chặn lần chạy đầu. Lệnh trên xoá quarantine attribute — an toàn vì bạn vừa download từ URL chính thức.
+
+### Cách 2 — Build từ source
+
+```bash
+git clone https://github.com/minhvblc/MCPFigma.git
 cd MCPFigma
 swift build -c release
 ```
 
-Binary sẽ ở `.build/release/mcp-figma`.
+Binary sẽ ở `.build/release/mcp-figma`. Chỉ cần Xcode 16+ nếu chọn cách này.
+
+### Cách 3 — Skill installer
+
+Nếu dùng cùng [`figma-to-swiftui-skill`](https://github.com/minhvblc/figma-to-swiftui-skill), `scripts/install.sh` ở repo đó tự động download binary + patch Claude config + cài skills trong 1 bước.
 
 ## Cấu hình Claude
 
@@ -269,6 +293,38 @@ MCPFigma/
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
  sleep 1) | FIGMA_ACCESS_TOKEN=dummy ./.build/release/mcp-figma
+```
+
+### Release flow (maintainer)
+
+Releases là **tag-triggered**: workflow `.github/workflows/release.yml` chỉ chạy khi push một tag dạng `v*`. Mỗi release tạo 1 universal binary (arm64 + x86_64) + checksum đính kèm.
+
+```bash
+# 1. Bảo đảm master xanh + đã merge mọi thứ muốn ship
+git checkout master && git pull
+
+# 2. Tag + push (workflow tự build, sed-inject version vào source, lipo, gh release create)
+git tag v0.3.0
+git push origin v0.3.0
+
+# 3. Chờ ~3 phút, kiểm tra https://github.com/minhvblc/MCPFigma/releases
+```
+
+Workflow sẽ:
+1. Inject `<tag>` (bỏ `v`) vào `Sources/MCPFigmaServer/Server/FigmaMCPServer.swift` line `version: "..."` để binary self-report đúng version.
+2. Build `swift build -c release` cho cả `--arch arm64` và `--arch x86_64`.
+3. `lipo -create` thành 1 universal binary, `strip` symbols.
+4. Smoke test: gửi `initialize` request, verify binary trả version trùng tag.
+5. `tar -czf` + `shasum -a 256` → 2 file đính kèm release.
+6. `gh release create v<tag>` với auto-generated notes từ commit log.
+
+**Nếu workflow fail:** check Actions tab → fix nguyên nhân → xoá tag local + remote → re-tag:
+
+```bash
+git tag -d v0.3.0
+git push --delete origin v0.3.0
+# fix...
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 ## Troubleshooting

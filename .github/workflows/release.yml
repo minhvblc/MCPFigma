@@ -1,0 +1,96 @@
+name: Release
+
+# Triggered when you push a tag like v0.3.0.
+# Builds a universal (arm64 + x86_64) macOS binary, packages it as
+# .tar.gz, computes a SHA-256 checksum, and creates a GitHub Release
+# with both files attached.
+#
+# To cut a release:
+#     git tag v0.3.0
+#     git push origin v0.3.0
+#
+# To rebuild without bumping the version (rare): re-tag and force-push.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed for `gh release create`
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: version
+        run: |
+          # refs/tags/v0.3.0 -> 0.3.0
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version $VERSION"
+
+      - name: Inject version into source
+        # Bake the tag version into FigmaMCPServer so the binary self-reports
+        # the same version users see on the release page. Sed pattern matches
+        # any current literal so the workflow keeps working after future bumps.
+        run: |
+          FILE="Sources/MCPFigmaServer/Server/FigmaMCPServer.swift"
+          sed -i '' -E "s/version: \"[0-9]+\.[0-9]+\.[0-9]+\"/version: \"${{ steps.version.outputs.version }}\"/" "$FILE"
+          grep "version:" "$FILE" | head -3
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build arm64
+        run: swift build -c release --arch arm64
+
+      - name: Build x86_64
+        run: swift build -c release --arch x86_64
+
+      - name: Combine into universal binary
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/mcp-figma \
+            .build/arm64-apple-macosx/release/mcp-figma \
+            .build/x86_64-apple-macosx/release/mcp-figma
+          strip dist/mcp-figma
+          chmod +x dist/mcp-figma
+          file dist/mcp-figma
+          ls -lh dist/mcp-figma
+
+      - name: Smoke test
+        # Confirm the binary self-reports the injected version.
+        # MCP servers run via stdio; sending an `initialize` request and
+        # parsing the response proves both that it starts and that the
+        # version embedded in source is the one we tagged.
+        run: |
+          REQ='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"0"}}}'
+          RESP=$(printf '%s\n' "$REQ" | FIGMA_ACCESS_TOKEN=dummy ./dist/mcp-figma | head -1)
+          echo "Initialize response: $RESP"
+          echo "$RESP" | grep -q "\"version\":\"${{ steps.version.outputs.version }}\"" \
+            || { echo "Version mismatch — binary did not self-report ${{ steps.version.outputs.version }}"; exit 1; }
+
+      - name: Package archive + checksum
+        run: |
+          cd dist
+          tar -czf "mcp-figma-${{ steps.version.outputs.version }}-darwin-universal.tar.gz" mcp-figma
+          shasum -a 256 "mcp-figma-${{ steps.version.outputs.version }}-darwin-universal.tar.gz" \
+            > "mcp-figma-${{ steps.version.outputs.version }}-darwin-universal.tar.gz.sha256"
+          ls -lh
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --title "v${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            "dist/mcp-figma-${{ steps.version.outputs.version }}-darwin-universal.tar.gz" \
+            "dist/mcp-figma-${{ steps.version.outputs.version }}-darwin-universal.tar.gz.sha256"
