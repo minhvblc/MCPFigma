@@ -32,4 +32,21 @@ public enum FigmaEndpoints {
     public static func variablesLocal(fileKey: String) -> URL {
         baseURL.appendingPathComponent("/v1/files/\(fileKey)/variables/local")
     }
+
+    public static func fileStyles(fileKey: String) -> URL {
+        baseURL.appendingPathComponent("/v1/files/\(fileKey)/styles")
+    }
+
+    public static func fileNodes(fileKey: String, nodeIds: [String], depth: Int? = nil) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/v1/files/\(fileKey)/nodes"),
+            resolvingAgainstBaseURL: false
+        )!
+        var items: [URLQueryItem] = [URLQueryItem(name: "ids", value: nodeIds.joined(separator: ","))]
+        if let depth {
+            items.append(URLQueryItem(name: "depth", value: String(depth)))
+        }
+        components.queryItems = items
+        return components.url!
+    }
 }

@@ -15,9 +15,20 @@ public enum FigmaAPIError: Error, Equatable, Sendable {
 
 public protocol FigmaAPI: Sendable {
     func fetchNodes(fileKey: String, nodeId: String, depth: Int?) async throws -> FigmaFileNodesResponse
+    func fetchNodes(fileKey: String, nodeIds: [String], depth: Int?) async throws -> FigmaFileNodesResponse
     func renderImages(fileKey: String, nodeIds: [String], scale: Int) async throws -> [String: URL]
     func download(_ url: URL) async throws -> Data
     func fetchVariables(fileKey: String) async throws -> FigmaVariablesResponse
+    func fetchStyles(fileKey: String) async throws -> FigmaStylesResponse
+}
+
+extension FigmaAPI {
+    /// Default bridge so existing single-id callers stay source-compatible.
+    public func fetchNodes(fileKey: String, nodeIds: [String], depth: Int? = nil) async throws -> FigmaFileNodesResponse {
+        // Default delegates to single-id form by joining; conforming types should
+        // override for true batching.
+        try await fetchNodes(fileKey: fileKey, nodeId: nodeIds.joined(separator: ","), depth: depth)
+    }
 }
 
 public struct FigmaClient: FigmaAPI {
@@ -72,6 +83,29 @@ public struct FigmaClient: FigmaAPI {
         let data = try await performJSON(url: url)
         do {
             return try JSONDecoder().decode(FigmaVariablesResponse.self, from: data)
+        } catch {
+            throw FigmaAPIError.invalidResponse
+        }
+    }
+
+    public func fetchStyles(fileKey: String) async throws -> FigmaStylesResponse {
+        let url = FigmaEndpoints.fileStyles(fileKey: fileKey)
+        let data = try await performJSON(url: url)
+        do {
+            return try JSONDecoder().decode(FigmaStylesResponse.self, from: data)
+        } catch {
+            throw FigmaAPIError.invalidResponse
+        }
+    }
+
+    public func fetchNodes(fileKey: String, nodeIds: [String], depth: Int? = nil) async throws -> FigmaFileNodesResponse {
+        guard !nodeIds.isEmpty else {
+            return FigmaFileNodesResponse(name: "", nodes: [:])
+        }
+        let url = FigmaEndpoints.fileNodes(fileKey: fileKey, nodeIds: nodeIds, depth: depth)
+        let data = try await performJSON(url: url)
+        do {
+            return try JSONDecoder().decode(FigmaFileNodesResponse.self, from: data)
         } catch {
             throw FigmaAPIError.invalidResponse
         }

@@ -145,6 +145,47 @@ struct AssetScannerTests {
         #expect(result.warnings.isEmpty)
     }
 
+    @Test("Bounding box on icon/image appends WxH size suffix to renamed")
+    func boundingBoxAppendsSizeSuffix() {
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(
+                id: "2",
+                name: "eICFacebook",
+                type: "FRAME",
+                absoluteBoundingBox: FigmaBoundingBox(x: 0, y: 0, width: 24, height: 24),
+                children: nil
+            ),
+            FigmaNode(
+                id: "3",
+                name: "eImageBanner",
+                type: "FRAME",
+                absoluteBoundingBox: FigmaBoundingBox(x: 0, y: 0, width: 375, height: 200),
+                children: nil
+            )
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.count == 2)
+        let byId = Dictionary(uniqueKeysWithValues: result.matches.map { ($0.nodeId, $0) })
+        #expect(byId["2"]?.renamed == "icAIFacebook24x24")
+        #expect(byId["2"]?.width == 24)
+        #expect(byId["2"]?.height == 24)
+        #expect(byId["3"]?.renamed == "imageAIBanner375x200")
+    }
+
+    @Test("Asset without bounding box keeps renamed without suffix")
+    func missingBoundingBoxLeavesRenamedUnchanged() {
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "eICHome", type: "FRAME", children: nil)
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.first?.renamed == "icAIHome")
+        #expect(result.matches.first?.width == nil)
+    }
+
     @Test("Mixed valid + invalid produces both matches and warnings")
     func mixedMatchesAndWarnings() {
         let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [

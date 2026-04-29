@@ -45,6 +45,7 @@ public struct TokenSet: Equatable, Sendable {
     public let radius: [NumberToken]
     public let opacity: [NumberToken]
     public let other: [NumberToken]
+    public let typography: [TypographyToken]
     public let warnings: [String]
 
     public init(
@@ -53,6 +54,7 @@ public struct TokenSet: Equatable, Sendable {
         radius: [NumberToken] = [],
         opacity: [NumberToken] = [],
         other: [NumberToken] = [],
+        typography: [TypographyToken] = [],
         warnings: [String] = []
     ) {
         self.colors = colors
@@ -60,6 +62,7 @@ public struct TokenSet: Equatable, Sendable {
         self.radius = radius
         self.opacity = opacity
         self.other = other
+        self.typography = typography
         self.warnings = warnings
     }
 }

@@ -14,7 +14,7 @@ struct FigmaMCPServer: Sendable {
     func run() async throws {
         let server = Server(
             name: "mcp-figma",
-            version: "0.2.0",
+            version: "0.3.0",
             capabilities: .init(tools: .init(listChanged: false))
         )
 
@@ -390,10 +390,43 @@ struct FigmaMCPServer: Sendable {
 
         let response = try await api.fetchVariables(fileKey: fileKey)
         let extractor = TokenExtractor()
-        let tokens = extractor.extract(from: response)
+        let variableTokens = extractor.extract(from: response)
+
+        // Typography pass: /styles → batched /nodes → TextStyleExtractor.
+        // Failures here add a warning but never block variable token output.
+        var typography: [TypographyToken] = []
+        var typographyWarnings: [String] = []
+        do {
+            let stylesResponse = try await api.fetchStyles(fileKey: fileKey)
+            let textNodeIds = stylesResponse.meta?.styles
+                .filter { $0.styleType == "TEXT" && !$0.nodeId.isEmpty }
+                .map { $0.nodeId } ?? []
+            let nodesResponse: FigmaFileNodesResponse?
+            if textNodeIds.isEmpty {
+                nodesResponse = nil
+            } else {
+                nodesResponse = try await api.fetchNodes(
+                    fileKey: fileKey,
+                    nodeIds: textNodeIds,
+                    depth: nil
+                )
+            }
+            let textResult = TextStyleExtractor().extract(
+                styles: stylesResponse,
+                nodes: nodesResponse
+            )
+            typography = textResult.typography
+            typographyWarnings = textResult.warnings
+        } catch let error as FigmaAPIError {
+            typographyWarnings = [
+                "Typography pass bỏ qua — Figma /styles trả lỗi: \(error)"
+            ]
+        }
+
+        let combinedWarnings = variableTokens.warnings + typographyWarnings
 
         let payload = TokensOutput(
-            colors: tokens.colors.map {
+            colors: variableTokens.colors.map {
                 TokensOutput.ColorToken(
                     figmaName: $0.figmaName,
                     swiftName: $0.swiftName,
@@ -401,11 +434,12 @@ struct FigmaMCPServer: Sendable {
                     darkHex: $0.darkHex
                 )
             },
-            spacing: tokens.spacing.map(TokensOutput.NumberToken.init),
-            radius: tokens.radius.map(TokensOutput.NumberToken.init),
-            opacity: tokens.opacity.map(TokensOutput.NumberToken.init),
-            other: tokens.other.map(TokensOutput.NumberToken.init),
-            warnings: tokens.warnings
+            spacing: variableTokens.spacing.map(TokensOutput.NumberToken.init),
+            radius: variableTokens.radius.map(TokensOutput.NumberToken.init),
+            opacity: variableTokens.opacity.map(TokensOutput.NumberToken.init),
+            other: variableTokens.other.map(TokensOutput.NumberToken.init),
+            typography: typography.map(TokensOutput.TypographyToken.init),
+            warnings: combinedWarnings
         )
         return .init(content: [text(try JSONOutput.encode(payload))], isError: false)
     }
@@ -574,10 +608,38 @@ struct TokensOutput: Encodable {
             self.isCapsule = token.isCapsule
         }
     }
+    struct TypographyToken: Encodable {
+        let figmaName: String
+        let swiftName: String
+        let fontFamily: String?
+        let fontPostScriptName: String?
+        let fontWeight: Int?
+        let fontSize: Double?
+        let lineHeightPx: Double?
+        let letterSpacing: Double?
+        let textCase: String?
+        let textAlignHorizontal: String?
+        let italic: Bool
+
+        init(_ t: MCPFigmaCore.TypographyToken) {
+            self.figmaName = t.figmaName
+            self.swiftName = t.swiftName
+            self.fontFamily = t.fontFamily
+            self.fontPostScriptName = t.fontPostScriptName
+            self.fontWeight = t.fontWeight
+            self.fontSize = t.fontSize
+            self.lineHeightPx = t.lineHeightPx
+            self.letterSpacing = t.letterSpacing
+            self.textCase = t.textCase
+            self.textAlignHorizontal = t.textAlignHorizontal
+            self.italic = t.italic
+        }
+    }
     let colors: [ColorToken]
     let spacing: [NumberToken]
     let radius: [NumberToken]
     let opacity: [NumberToken]
     let other: [NumberToken]
+    let typography: [TypographyToken]
     let warnings: [String]
 }

@@ -64,4 +64,14 @@ public extension AssetNameRewriter {
     static func fileName(renamed: String, scale: Int) -> String {
         "\(renamed)@\(scale)x.png"
     }
+
+    /// Appends a `WxH` suffix derived from the node's bounding box (rounded to int).
+    /// Returns `renamed` unchanged when either dimension is missing or non-positive.
+    static func appendSizeSuffix(renamed: String, width: Double?, height: Double?) -> String {
+        guard let width, let height, width > 0, height > 0 else { return renamed }
+        let w = Int(width.rounded())
+        let h = Int(height.rounded())
+        guard w > 0, h > 0 else { return renamed }
+        return "\(renamed)\(w)x\(h)"
+    }
 }

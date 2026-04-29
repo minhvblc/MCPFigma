@@ -88,4 +88,36 @@ struct AssetNameRewriterTests {
         #expect(AssetNameRewriter.fileName(renamed: "icAIHome", scale: 2) == "icAIHome@2x.png")
         #expect(AssetNameRewriter.fileName(renamed: "imageAIBanner", scale: 3) == "imageAIBanner@3x.png")
     }
+
+    @Test("appendSizeSuffix appends WxH for valid dims, rounded to nearest int")
+    func appendSizeSuffixHappyPath() {
+        #expect(
+            AssetNameRewriter.appendSizeSuffix(renamed: "icAIFacebook", width: 24, height: 24)
+                == "icAIFacebook24x24"
+        )
+        #expect(
+            AssetNameRewriter.appendSizeSuffix(renamed: "imageAIBanner", width: 375.4, height: 812.6)
+                == "imageAIBanner375x813"
+        )
+    }
+
+    @Test("appendSizeSuffix returns renamed unchanged when dims missing or non-positive")
+    func appendSizeSuffixFallback() {
+        #expect(
+            AssetNameRewriter.appendSizeSuffix(renamed: "icAIHome", width: nil, height: nil)
+                == "icAIHome"
+        )
+        #expect(
+            AssetNameRewriter.appendSizeSuffix(renamed: "icAIHome", width: 24, height: nil)
+                == "icAIHome"
+        )
+        #expect(
+            AssetNameRewriter.appendSizeSuffix(renamed: "icAIHome", width: 0, height: 24)
+                == "icAIHome"
+        )
+        #expect(
+            AssetNameRewriter.appendSizeSuffix(renamed: "icAIHome", width: 0.4, height: 0.4)
+                == "icAIHome"
+        )
+    }
 }

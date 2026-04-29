@@ -5,12 +5,23 @@ public struct FoundAsset: Equatable, Sendable {
     public let figmaName: String
     public let kind: AssetKind
     public let renamed: String
+    public let width: Double?
+    public let height: Double?
 
-    public init(nodeId: String, figmaName: String, kind: AssetKind, renamed: String) {
+    public init(
+        nodeId: String,
+        figmaName: String,
+        kind: AssetKind,
+        renamed: String,
+        width: Double? = nil,
+        height: Double? = nil
+    ) {
         self.nodeId = nodeId
         self.figmaName = figmaName
         self.kind = kind
         self.renamed = renamed
+        self.width = width
+        self.height = height
     }
 }
 
@@ -60,11 +71,20 @@ public struct AssetScanner: Sendable {
         }
         do {
             let result = try rewriter.rewrite(node.name)
+            let width = node.absoluteBoundingBox?.width
+            let height = node.absoluteBoundingBox?.height
+            let renamed = AssetNameRewriter.appendSizeSuffix(
+                renamed: result.renamed,
+                width: width,
+                height: height
+            )
             matches.append(FoundAsset(
                 nodeId: node.id,
                 figmaName: node.name,
                 kind: result.kind,
-                renamed: result.renamed
+                renamed: renamed,
+                width: width,
+                height: height
             ))
             return
         } catch RewriteError.notExportable {

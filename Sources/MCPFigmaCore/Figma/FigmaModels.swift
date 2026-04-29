@@ -20,19 +20,65 @@ public struct FigmaNode: Decodable, Equatable, Sendable {
     public let type: String
     public let absoluteBoundingBox: FigmaBoundingBox?
     public let children: [FigmaNode]?
+    public let style: FigmaTypeStyle?
 
     public init(
         id: String,
         name: String,
         type: String,
         absoluteBoundingBox: FigmaBoundingBox? = nil,
-        children: [FigmaNode]? = nil
+        children: [FigmaNode]? = nil,
+        style: FigmaTypeStyle? = nil
     ) {
         self.id = id
         self.name = name
         self.type = type
         self.absoluteBoundingBox = absoluteBoundingBox
         self.children = children
+        self.style = style
+    }
+}
+
+/// Subset of Figma TypeStyle fields needed to reproduce typography in SwiftUI.
+/// Figma may return additional keys (`fontFamily`, `fontPostScriptName`, etc.);
+/// we decode the SwiftUI-relevant ones and tolerate the rest.
+public struct FigmaTypeStyle: Decodable, Equatable, Sendable {
+    public let fontFamily: String?
+    public let fontPostScriptName: String?
+    public let fontWeight: Double?
+    public let fontSize: Double?
+    public let lineHeightPx: Double?
+    public let lineHeightPercent: Double?
+    public let lineHeightUnit: String?
+    public let letterSpacing: Double?
+    public let textCase: String?
+    public let textAlignHorizontal: String?
+    public let italic: Bool?
+
+    public init(
+        fontFamily: String? = nil,
+        fontPostScriptName: String? = nil,
+        fontWeight: Double? = nil,
+        fontSize: Double? = nil,
+        lineHeightPx: Double? = nil,
+        lineHeightPercent: Double? = nil,
+        lineHeightUnit: String? = nil,
+        letterSpacing: Double? = nil,
+        textCase: String? = nil,
+        textAlignHorizontal: String? = nil,
+        italic: Bool? = nil
+    ) {
+        self.fontFamily = fontFamily
+        self.fontPostScriptName = fontPostScriptName
+        self.fontWeight = fontWeight
+        self.fontSize = fontSize
+        self.lineHeightPx = lineHeightPx
+        self.lineHeightPercent = lineHeightPercent
+        self.lineHeightUnit = lineHeightUnit
+        self.letterSpacing = letterSpacing
+        self.textCase = textCase
+        self.textAlignHorizontal = textAlignHorizontal
+        self.italic = italic
     }
 }
 
@@ -53,6 +99,49 @@ public struct FigmaFileNodesResponse: Decodable, Sendable {
 public struct FigmaImagesResponse: Decodable, Sendable {
     public let err: String?
     public let images: [String: String?]
+}
+
+// MARK: - File styles (text styles, fill styles, effect styles)
+
+public struct FigmaStylesResponse: Decodable, Sendable {
+    public let status: Int?
+    public let error: Bool?
+    public let message: String?
+    public let meta: Meta?
+
+    public init(status: Int?, error: Bool?, message: String?, meta: Meta?) {
+        self.status = status
+        self.error = error
+        self.message = message
+        self.meta = meta
+    }
+
+    public struct Meta: Decodable, Sendable {
+        public let styles: [FigmaStyleSummary]
+        public init(styles: [FigmaStyleSummary]) { self.styles = styles }
+    }
+}
+
+public struct FigmaStyleSummary: Decodable, Equatable, Sendable {
+    public let key: String
+    public let nodeId: String
+    public let name: String
+    public let styleType: String
+    public let description: String?
+
+    enum CodingKeys: String, CodingKey {
+        case key, name, description
+        case nodeId = "node_id"
+        case styleType = "style_type"
+    }
+
+    public init(key: String, nodeId: String, name: String, styleType: String, description: String? = nil) {
+        self.key = key
+        self.nodeId = nodeId
+        self.name = name
+        self.styleType = styleType
+        self.description = description
+    }
 }
 
 // MARK: - Variables (Figma local variables API)

@@ -203,11 +203,16 @@ enum ToolDefinitions {
     static let extractTokens = Tool(
         name: "figma_extract_tokens",
         description: """
-        Đọc Figma local variables và map sang SwiftUI naming convention. Trả về \
-        colors (lightHex/darkHex theo mode), spacing, radius (đánh dấu isCapsule \
-        cho value >= 999), opacity, other. Tên Figma 'primary/500' → swiftName \
-        'primary500'; 'spacing/md' → swiftName 'md' (drop leading segment cho \
-        spacing/radius/opacity). Yêu cầu Figma plan có Variables API.
+        Đọc Figma local variables + shared text styles và map sang SwiftUI \
+        naming convention. Trả về colors (lightHex/darkHex theo mode), spacing, \
+        radius (đánh dấu isCapsule cho value >= 999), opacity, other, và \
+        typography (fontFamily, fontPostScriptName, fontWeight, fontSize, \
+        lineHeightPx, letterSpacing, textCase, textAlignHorizontal, italic — \
+        đọc từ /v1/files/<key>/styles + /v1/files/<key>/nodes). Tên Figma \
+        'primary/500' → swiftName 'primary500'; 'spacing/md' → swiftName 'md'; \
+        'Heading 3 28px' → swiftName 'heading328px'. Variables API + /styles \
+        có thể fail độc lập — phần nào fail trả empty + warning, phần khác vẫn \
+        ra output.
         """,
         inputSchema: .object([
             "type": .string("object"),
