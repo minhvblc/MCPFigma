@@ -43,6 +43,30 @@ public enum UnifiedRowStatus: String, Sendable {
     case skipped
 }
 
+public struct UnifiedExportCoverage: Equatable, Sendable {
+    public let discoveredCount: Int
+    public let exportedCount: Int
+    public let autoAddedRows: [String]
+    public let skippedNodeIds: [String]
+    /// nodeIds the scanner classified as eAnim*. Reported for visibility only —
+    /// these are NOT auto-added as rows because they have no downloadable bytes.
+    public let animationNodeIds: [String]
+
+    public init(
+        discoveredCount: Int,
+        exportedCount: Int,
+        autoAddedRows: [String],
+        skippedNodeIds: [String],
+        animationNodeIds: [String] = []
+    ) {
+        self.discoveredCount = discoveredCount
+        self.exportedCount = exportedCount
+        self.autoAddedRows = autoAddedRows
+        self.skippedNodeIds = skippedNodeIds
+        self.animationNodeIds = animationNodeIds
+    }
+}
+
 public struct UnifiedExportRowResult: Equatable, Sendable {
     public let nodeId: String
     public let exporter: UnifiedRowExporter
@@ -61,6 +85,19 @@ public struct UnifiedExportSummary: Equatable, Sendable {
     public let rows: [UnifiedExportRowResult]
     public let warnings: [ScanWarning]
     public let assetCatalogPath: String?
+    public let coverage: UnifiedExportCoverage?
+
+    public init(
+        rows: [UnifiedExportRowResult],
+        warnings: [ScanWarning],
+        assetCatalogPath: String?,
+        coverage: UnifiedExportCoverage? = nil
+    ) {
+        self.rows = rows
+        self.warnings = warnings
+        self.assetCatalogPath = assetCatalogPath
+        self.coverage = coverage
+    }
 }
 
 // MARK: - Exporter
@@ -71,7 +108,13 @@ public struct UnifiedExportSummary: Equatable, Sendable {
 ///     a shared assets dir on disk; per-node retry for nulls; PNG signature
 ///     validation. No xcassets import (shared assets are referenced by code).
 ///   - Tagged rows that error → automatically rewritten to fallback and retried.
+///   - eAnim* nodes (lottiePlaceholder) → pass-through, never downloaded.
 public struct UnifiedExporter: Sendable {
+    /// Subdirectory under `outputDir` where tagged @2x/@3x PNGs are staged
+    /// before being copied into the .xcassets imageset folders. Internal
+    /// staging — callers should not depend on this name.
+    private static let stagingDirName = "_mcpfigma"
+
     private let api: FigmaAPI
     private let scanner: AssetScanner
     private let downloadConcurrency: Int
@@ -97,29 +140,102 @@ public struct UnifiedExporter: Sendable {
         scales: [Int] = [2, 3],
         fallbackScale: Int = 3,
         overwrite: Bool = true,
-        skipIfExistsInCatalog: Bool = true
+        skipIfExistsInCatalog: Bool = true,
+        autoDiscover: Bool = false
     ) async throws -> UnifiedExportSummary {
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: sharedAssetsDir, withIntermediateDirectories: true)
 
-        let lottieRows = rows.filter { $0.strategy == .lottiePlaceholder }
-        let materialRows = rows.filter { $0.strategy != .lottiePlaceholder }
+        // Scan once: re-used for autoDiscover, eAnim detection, and (when present)
+        // passed straight to AssetExporter to skip its second fetchNodes round-trip.
+        var prefetchedRoot: FigmaNode?
+        var prefetchedScan: ScanResult?
+        var coverage: UnifiedExportCoverage?
+        var effectiveRows = rows
+        var animationNodeIds: Set<String> = []
+
+        if autoDiscover {
+            let response = try await api.fetchNodes(fileKey: fileKey, nodeId: rootNodeId, depth: nil)
+            guard let root = response.nodes[rootNodeId]?.document else {
+                throw FigmaAPIError.notFound
+            }
+            let scan = scanner.scan(root)
+            prefetchedRoot = root
+            prefetchedScan = scan
+            animationNodeIds = Set(scan.animations.map(\.nodeId))
+
+            let existingIds = Set(rows.map(\.nodeId))
+            var added: [String] = []
+            for asset in scan.matches where !existingIds.contains(asset.nodeId) {
+                effectiveRows.append(UnifiedExportRow(
+                    nodeId: asset.nodeId,
+                    exporter: .tagged,
+                    exportName: asset.renamed,
+                    friendlyName: asset.renamed,
+                    strategy: .atomic
+                ))
+                added.append(asset.nodeId)
+            }
+            coverage = UnifiedExportCoverage(
+                discoveredCount: scan.matches.count,
+                exportedCount: 0, // filled in below after results computed
+                autoAddedRows: added,
+                skippedNodeIds: [],
+                animationNodeIds: scan.animations.map(\.nodeId)
+            )
+        }
+
+        // Caller-supplied rows targeting an eAnim node are coerced to the
+        // lottiePlaceholder pipeline regardless of declared strategy — eAnim
+        // never produces downloadable bytes.
+        if !animationNodeIds.isEmpty {
+            effectiveRows = effectiveRows.map { row in
+                guard animationNodeIds.contains(row.nodeId), row.strategy != .lottiePlaceholder else {
+                    return row
+                }
+                return UnifiedExportRow(
+                    nodeId: row.nodeId,
+                    exporter: row.exporter,
+                    exportName: row.exportName,
+                    friendlyName: row.friendlyName,
+                    strategy: .lottiePlaceholder
+                )
+            }
+        }
+
+        let lottieRows = effectiveRows.filter { $0.strategy == .lottiePlaceholder }
+        let materialRows = effectiveRows.filter { $0.strategy != .lottiePlaceholder }
 
         // Tagged rows go through the full xcassets pipeline.
         let taggedNodeIds = Set(materialRows.filter { $0.exporter == .tagged }.map(\.nodeId))
         let taggedSummary: ExportSummary?
         if !taggedNodeIds.isEmpty {
             let exporter = AssetExporter(api: api, scanner: scanner)
-            taggedSummary = try await exporter.export(
-                fileKey: fileKey,
-                rootNodeId: rootNodeId,
-                outputDir: outputDir.appendingPathComponent("_mcpfigma", isDirectory: true),
-                scales: scales,
-                overwrite: overwrite,
-                selectedNodeIds: taggedNodeIds,
-                assetCatalogDir: assetCatalogDir,
-                skipIfExistsInCatalog: skipIfExistsInCatalog
-            )
+            let stagingDir = outputDir.appendingPathComponent(Self.stagingDirName, isDirectory: true)
+            if let prefetchedRoot {
+                taggedSummary = try await exporter.export(
+                    fileKey: fileKey,
+                    root: prefetchedRoot,
+                    scan: prefetchedScan,
+                    outputDir: stagingDir,
+                    scales: scales,
+                    overwrite: overwrite,
+                    selectedNodeIds: taggedNodeIds,
+                    assetCatalogDir: assetCatalogDir,
+                    skipIfExistsInCatalog: skipIfExistsInCatalog
+                )
+            } else {
+                taggedSummary = try await exporter.export(
+                    fileKey: fileKey,
+                    rootNodeId: rootNodeId,
+                    outputDir: stagingDir,
+                    scales: scales,
+                    overwrite: overwrite,
+                    selectedNodeIds: taggedNodeIds,
+                    assetCatalogDir: assetCatalogDir,
+                    skipIfExistsInCatalog: skipIfExistsInCatalog
+                )
+            }
         } else {
             taggedSummary = nil
         }
@@ -206,7 +322,7 @@ public struct UnifiedExporter: Sendable {
                     imagesetPath: nil,
                     xcassetsImported: false,
                     sharedPath: nil,
-                    reason: "Không tìm thấy outcome cho row — skill cần kiểm tra logic"
+                    reason: "No outcome found for row — internal pipeline error"
                 ))
             }
         }
@@ -228,54 +344,72 @@ public struct UnifiedExporter: Sendable {
             ))
         }
 
+        let finalCoverage: UnifiedExportCoverage? = coverage.map { c in
+            let exported = finalResults.filter { $0.status == .done }.count
+            let autoIds = Set(c.autoAddedRows)
+            let skipped = finalResults
+                .filter { autoIds.contains($0.nodeId) && $0.status != .done }
+                .map(\.nodeId)
+            return UnifiedExportCoverage(
+                discoveredCount: c.discoveredCount,
+                exportedCount: exported,
+                autoAddedRows: c.autoAddedRows,
+                skippedNodeIds: skipped,
+                animationNodeIds: c.animationNodeIds
+            )
+        }
+
         return UnifiedExportSummary(
             rows: finalResults,
             warnings: taggedSummary?.warnings ?? [],
-            assetCatalogPath: taggedSummary?.assetCatalogImport?.catalogPath
+            assetCatalogPath: taggedSummary?.assetCatalogImport?.catalogPath,
+            coverage: finalCoverage
         )
     }
 
     // MARK: - Tagged outcome mapping
 
+    /// Correlates AssetExporter results back to the input rows by nodeId.
+    /// AssetExporter emits SavedFile/ExportFailure tagged with the originating
+    /// nodeId, so this is now a strict equality match (no exportName substring).
     private func mapTaggedOutcomes(
         rows: [UnifiedExportRow],
         summary: ExportSummary?
     ) -> [String: UnifiedExportRowResult] {
         guard let summary else { return [:] }
 
-        // Build figmaName → nodeId map by re-resolving via scan.matches isn't available here,
-        // but AssetExporter outputs reference figmaName + renamed only. We need to correlate
-        // by exportName because the skill set rows[].exportName from B0 (figma_list_assets)
-        // which uses the same renamer.
-        let savedByExportName: [String: [SavedFile]] = Dictionary(grouping: summary.savedFiles, by: \.renamed)
-        let skippedByExportName: [String: [SavedFile]] = Dictionary(grouping: summary.skipped, by: \.renamed)
-        let errorsByName: [String: ExportFailure] = Dictionary(
-            uniqueKeysWithValues: summary.errors.map { ($0.figmaName, $0) }
+        let savedByNode: [String: [SavedFile]] = Dictionary(grouping: summary.savedFiles, by: \.nodeId)
+        let skippedByNode: [String: [SavedFile]] = Dictionary(grouping: summary.skipped, by: \.nodeId)
+        let renderErrors: [String: ExportFailure] = Dictionary(
+            summary.errors.map { ($0.nodeId, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
-        let importedByExportName: [String: [SavedFile]] = Dictionary(
+        let importedByNode: [String: [SavedFile]] = Dictionary(
             grouping: summary.assetCatalogImport?.savedFiles ?? [],
-            by: \.renamed
+            by: \.nodeId
         )
-        let importErrorsByName: [String: ExportFailure] = Dictionary(
-            uniqueKeysWithValues: (summary.assetCatalogImport?.errors ?? []).map { ($0.figmaName, $0) }
+        let importErrors: [String: ExportFailure] = Dictionary(
+            (summary.assetCatalogImport?.errors ?? []).map { ($0.nodeId, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
 
         var byNode: [String: UnifiedExportRowResult] = [:]
         for row in rows where row.exporter == .tagged {
-            guard let exportName = row.exportName else { continue }
-
-            let savedAt3x = savedByExportName[exportName]?.first(where: { $0.scale == 3 })?.path
-                ?? skippedByExportName[exportName]?.first(where: { $0.scale == 3 })?.path
-            let imagesetPath = importedByExportName[exportName]?.first.map {
+            let savedFiles = (savedByNode[row.nodeId] ?? []) + (skippedByNode[row.nodeId] ?? [])
+            let savedAt3x = savedFiles.first(where: { $0.scale == 3 })?.path
+                ?? savedFiles.first?.path
+            let imagesetPath = importedByNode[row.nodeId]?.first.map {
                 URL(fileURLWithPath: $0.path).deletingLastPathComponent().path
             }
             let xcassetsImported = imagesetPath != nil
             let saved = savedAt3x != nil
 
-            let renderError = errorsByName.values.first { $0.figmaName.contains(exportName) }
-                ?? errorsByName.first { $0.key.contains(exportName) }?.value
-            let importError = importErrorsByName.values.first { $0.figmaName.contains(exportName) }
-                ?? importErrorsByName.first { $0.key.contains(exportName) }?.value
+            let renderError = renderErrors[row.nodeId]
+            let importError = importErrors[row.nodeId]
+            let exportName = row.exportName
+                ?? savedFiles.first?.renamed
+                ?? renderError?.figmaName
+                ?? importError?.figmaName
 
             let status: UnifiedRowStatus
             let reason: String?
@@ -290,7 +424,7 @@ public struct UnifiedExporter: Sendable {
                 reason = nil
             } else {
                 status = .failed
-                reason = "Không tìm thấy file đã render cho \(exportName)"
+                reason = "Không tìm thấy file đã render cho node \(row.nodeId)"
             }
 
             byNode[row.nodeId] = UnifiedExportRowResult(

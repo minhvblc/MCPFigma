@@ -136,7 +136,7 @@ enum ToolDefinitions {
         """,
         inputSchema: .object([
             "type": .string("object"),
-            "required": .array([.string("fileKey"), .string("nodeId"), .string("outputDir"), .string("sharedAssetsDir"), .string("rows")]),
+            "required": .array([.string("fileKey"), .string("nodeId"), .string("outputDir"), .string("sharedAssetsDir")]),
             "properties": .object([
                 "fileKey": .object([
                     "type": .string("string"),
@@ -195,6 +195,10 @@ enum ToolDefinitions {
                 "skipIfExistsInCatalog": .object([
                     "type": .string("boolean"),
                     "description": .string("Bỏ qua tagged row có imageset đã tồn tại sẵn, mặc định true.")
+                ]),
+                "autoDiscover": .object([
+                    "type": .string("boolean"),
+                    "description": .string("Nếu true, server tự quét subtree dưới nodeId qua AssetScanner, sinh tagged row cho mọi eIC*/eImage* tìm được, và merge với rows[] (caller-supplied wins on duplicates by nodeId). eAnim* (Lottie) chỉ được liệt kê trong coverage.animationNodeIds, KHÔNG auto-add. Response thêm khối 'coverage' (discoveredCount, exportedCount, autoAddedRows, skippedNodeIds, animationNodeIds). Mặc định false.")
                 ])
             ])
         ])

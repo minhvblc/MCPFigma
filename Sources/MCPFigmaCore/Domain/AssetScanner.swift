@@ -38,11 +38,16 @@ public struct ScanWarning: Equatable, Sendable {
 }
 
 public struct ScanResult: Equatable, Sendable {
+    /// Downloadable assets (icon + image). Animations are surfaced separately
+    /// so callers that render don't have to filter them out.
     public let matches: [FoundAsset]
+    /// eAnim* placeholders. Reported but never downloaded.
+    public let animations: [FoundAsset]
     public let warnings: [ScanWarning]
 
-    public init(matches: [FoundAsset], warnings: [ScanWarning]) {
+    public init(matches: [FoundAsset], animations: [FoundAsset] = [], warnings: [ScanWarning]) {
         self.matches = matches
+        self.animations = animations
         self.warnings = warnings
     }
 }
@@ -56,36 +61,48 @@ public struct AssetScanner: Sendable {
 
     public func scan(_ root: FigmaNode) -> ScanResult {
         var matches: [FoundAsset] = []
+        var animations: [FoundAsset] = []
         var warnings: [ScanWarning] = []
-        walk(root, matches: &matches, warnings: &warnings)
-        return ScanResult(matches: matches, warnings: warnings)
+        walk(root, matches: &matches, animations: &animations, warnings: &warnings)
+        return ScanResult(matches: matches, animations: animations, warnings: warnings)
     }
 
     private func walk(
         _ node: FigmaNode,
         matches: inout [FoundAsset],
+        animations: inout [FoundAsset],
         warnings: inout [ScanWarning]
     ) {
-        if AssetNameRewriter.isSkippedSubtree(node.name) {
-            return
-        }
         do {
             let result = try rewriter.rewrite(node.name)
             let width = node.absoluteBoundingBox?.width
             let height = node.absoluteBoundingBox?.height
-            let renamed = AssetNameRewriter.appendSizeSuffix(
-                renamed: result.renamed,
-                width: width,
-                height: height
-            )
-            matches.append(FoundAsset(
-                nodeId: node.id,
-                figmaName: node.name,
-                kind: result.kind,
-                renamed: renamed,
-                width: width,
-                height: height
-            ))
+            switch result.kind {
+            case .icon, .image:
+                let renamed = AssetNameRewriter.appendSizeSuffix(
+                    renamed: result.renamed,
+                    width: width,
+                    height: height
+                )
+                matches.append(FoundAsset(
+                    nodeId: node.id,
+                    figmaName: node.name,
+                    kind: result.kind,
+                    renamed: renamed,
+                    width: width,
+                    height: height
+                ))
+            case .animation:
+                animations.append(FoundAsset(
+                    nodeId: node.id,
+                    figmaName: node.name,
+                    kind: .animation,
+                    renamed: result.renamed,
+                    width: width,
+                    height: height
+                ))
+            }
+            // All three prefixes stop descent.
             return
         } catch RewriteError.notExportable {
         } catch let error as RewriteError {
@@ -104,7 +121,7 @@ public struct AssetScanner: Sendable {
 
         guard let children = node.children else { return }
         for child in children {
-            walk(child, matches: &matches, warnings: &warnings)
+            walk(child, matches: &matches, animations: &animations, warnings: &warnings)
         }
     }
 
@@ -115,7 +132,7 @@ public struct AssetScanner: Sendable {
         case .containsIllegalChars(let name):
             return "Tên '\(name)' chứa ký tự không cho phép — chỉ cho phép [A-Za-z0-9_]"
         case .notExportable(let name):
-            return "Tên '\(name)' không có prefix eIC/eImage"
+            return "Tên '\(name)' không có prefix eIC/eImage/eAnim"
         }
     }
 }

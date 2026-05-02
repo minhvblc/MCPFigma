@@ -3,6 +3,7 @@ import Foundation
 public enum AssetKind: Sendable, Equatable, Hashable {
     case icon
     case image
+    case animation
 }
 
 public enum RewriteError: Error, Equatable, Sendable {
@@ -14,21 +15,17 @@ public enum RewriteError: Error, Equatable, Sendable {
 public struct AssetNameRewriter: Sendable {
     private static let iconPrefix = "eIC"
     private static let imagePrefix = "eImage"
+    private static let animationPrefix = "eAnim"
     private static let iconReplacement = "icAI"
     private static let imageReplacement = "imageAI"
-    private static let skipPrefix = "eAnim"
 
     public init() {}
-
-    public static func isSkippedSubtree(_ figmaName: String) -> Bool {
-        figmaName
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .hasPrefix(skipPrefix)
-    }
 
     public func rewrite(_ figmaName: String) throws -> (kind: AssetKind, renamed: String) {
         let trimmed = figmaName.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // Order matters: eImage before eIC is irrelevant (no overlap), but eAnim
+        // is the only stop-descent prefix that produces no rendered output.
         if trimmed.hasPrefix(Self.iconPrefix) {
             let remainder = String(trimmed.dropFirst(Self.iconPrefix.count))
             try validate(remainder: remainder, originalName: figmaName)
@@ -38,6 +35,13 @@ public struct AssetNameRewriter: Sendable {
             let remainder = String(trimmed.dropFirst(Self.imagePrefix.count))
             try validate(remainder: remainder, originalName: figmaName)
             return (.image, Self.imageReplacement + remainder)
+        }
+        if trimmed.hasPrefix(Self.animationPrefix) {
+            let remainder = String(trimmed.dropFirst(Self.animationPrefix.count))
+            try validate(remainder: remainder, originalName: figmaName)
+            // Animations keep the original Figma name — they're not downloaded
+            // and not renamed for xcassets; SwiftUI skill renders a placeholder.
+            return (.animation, trimmed)
         }
         throw RewriteError.notExportable(figmaName)
     }

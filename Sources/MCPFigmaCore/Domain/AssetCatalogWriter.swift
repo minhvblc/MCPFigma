@@ -30,6 +30,7 @@ struct AssetCatalogWriter: Sendable {
                         groupDirEnsured = true
                     } catch {
                         errors.append(ExportFailure(
+                            nodeId: asset.nodeId,
                             figmaName: asset.figmaName,
                             reason: "Không tạo được group folder \(groupDir.path): \(error)"
                         ))
@@ -43,6 +44,7 @@ struct AssetCatalogWriter: Sendable {
                 try FileManager.default.createDirectory(at: imagesetDir, withIntermediateDirectories: true)
             } catch {
                 errors.append(ExportFailure(
+                    nodeId: asset.nodeId,
                     figmaName: asset.figmaName,
                     reason: "Không tạo được imageset \(imagesetDir.path): \(error)"
                 ))
@@ -57,6 +59,7 @@ struct AssetCatalogWriter: Sendable {
                 let sourceURL = sourceDir.appendingPathComponent(filename)
                 let destinationURL = imagesetDir.appendingPathComponent(filename)
                 let savedFile = SavedFile(
+                    nodeId: asset.nodeId,
                     figmaName: asset.figmaName,
                     renamed: asset.finalName,
                     scale: scale,
@@ -65,6 +68,7 @@ struct AssetCatalogWriter: Sendable {
 
                 guard FileManager.default.fileExists(atPath: sourceURL.path) else {
                     errors.append(ExportFailure(
+                        nodeId: asset.nodeId,
                         figmaName: asset.figmaName,
                         reason: "Thiếu file nguồn để import vào asset catalog (scale \(scale)): \(sourceURL.path)"
                     ))
@@ -84,6 +88,7 @@ struct AssetCatalogWriter: Sendable {
                     contents.upsertUniversalImage(filename: filename, scale: scale)
                 } catch {
                     errors.append(ExportFailure(
+                        nodeId: asset.nodeId,
                         figmaName: asset.figmaName,
                         reason: "Import vào asset catalog thất bại (scale \(scale)): \(error)"
                     ))
@@ -94,6 +99,7 @@ struct AssetCatalogWriter: Sendable {
                 try writeContents(contents, to: contentsURL)
             } catch {
                 errors.append(ExportFailure(
+                    nodeId: asset.nodeId,
                     figmaName: asset.figmaName,
                     reason: "Không ghi được Contents.json cho imageset \(asset.finalName): \(error)"
                 ))

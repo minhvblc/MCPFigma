@@ -1,15 +1,31 @@
 import Foundation
 
 public struct SavedFile: Equatable, Sendable {
+    public let nodeId: String
     public let figmaName: String
     public let renamed: String
     public let scale: Int
     public let path: String
+
+    public init(nodeId: String, figmaName: String, renamed: String, scale: Int, path: String) {
+        self.nodeId = nodeId
+        self.figmaName = figmaName
+        self.renamed = renamed
+        self.scale = scale
+        self.path = path
+    }
 }
 
 public struct ExportFailure: Equatable, Sendable {
+    public let nodeId: String
     public let figmaName: String
     public let reason: String
+
+    public init(nodeId: String, figmaName: String, reason: String) {
+        self.nodeId = nodeId
+        self.figmaName = figmaName
+        self.reason = reason
+    }
 }
 
 public struct AssetCatalogImportSummary: Equatable, Sendable {
@@ -61,9 +77,37 @@ public struct AssetExporter: Sendable {
         guard let root = response.nodes[rootNodeId]?.document else {
             throw FigmaAPIError.notFound
         }
-        let screenName = root.name
+        return try await export(
+            fileKey: fileKey,
+            root: root,
+            scan: nil,
+            outputDir: outputDir,
+            scales: scales,
+            overwrite: overwrite,
+            selectedNodeIds: selectedNodeIds,
+            assetCatalogDir: assetCatalogDir,
+            skipIfExistsInCatalog: skipIfExistsInCatalog
+        )
+    }
 
-        let scan = scanner.scan(root)
+    /// Internal entry point used by `UnifiedExporter` to avoid a duplicate
+    /// `fetchNodes` round-trip when the caller has already loaded the tree
+    /// (and optionally scanned it).
+    func export(
+        fileKey: String,
+        root: FigmaNode,
+        scan: ScanResult?,
+        outputDir: URL,
+        scales: [Int] = [2, 3],
+        overwrite: Bool = true,
+        selectedNodeIds: Set<String>? = nil,
+        assetCatalogDir: URL? = nil,
+        skipIfExistsInCatalog: Bool = false
+    ) async throws -> ExportSummary {
+        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+
+        let screenName = root.name
+        let scan = scan ?? scanner.scan(root)
         let targets = selectedNodeIds.map { selected in
             scan.matches.filter { selected.contains($0.nodeId) }
         } ?? scan.matches
@@ -87,6 +131,7 @@ public struct AssetExporter: Sendable {
                     for scale in scales {
                         let filename = AssetNameRewriter.fileName(renamed: asset.finalName, scale: scale)
                         skipped.append(SavedFile(
+                            nodeId: asset.nodeId,
                             figmaName: asset.figmaName,
                             renamed: asset.finalName,
                             scale: scale,
@@ -111,6 +156,7 @@ public struct AssetExporter: Sendable {
             } catch {
                 for item in toExport {
                     errors.append(ExportFailure(
+                        nodeId: item.nodeId,
                         figmaName: item.figmaName,
                         reason: "renderImages(scale: \(scale)) lỗi: \(error)"
                     ))
@@ -135,6 +181,7 @@ public struct AssetExporter: Sendable {
             for missingId in missingIds {
                 if let asset = toExport.first(where: { $0.nodeId == missingId }) {
                     errors.append(ExportFailure(
+                        nodeId: asset.nodeId,
                         figmaName: asset.figmaName,
                         reason: "Figma không trả URL cho scale \(scale)"
                     ))
@@ -209,6 +256,7 @@ public struct AssetExporter: Sendable {
 
     private func process(job: DownloadJob, overwrite: Bool) async -> DownloadOutcome {
         let savedFile = SavedFile(
+            nodeId: job.asset.nodeId,
             figmaName: job.asset.figmaName,
             renamed: job.finalName,
             scale: job.scale,
@@ -223,6 +271,7 @@ public struct AssetExporter: Sendable {
             return .saved(savedFile)
         } catch {
             return .failed(ExportFailure(
+                nodeId: job.asset.nodeId,
                 figmaName: job.asset.figmaName,
                 reason: "download/save thất bại (scale \(job.scale)): \(error)"
             ))

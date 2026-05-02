@@ -292,8 +292,10 @@ struct FigmaMCPServer: Sendable {
         guard sharedDirString.hasPrefix("/") else {
             return errorResult("'sharedAssetsDir' phải là đường dẫn tuyệt đối, nhận được: \(sharedDirString)")
         }
-        guard let rawRows = args["rows"]?.arrayValue, !rawRows.isEmpty else {
-            return errorResult("Thiếu hoặc rỗng 'rows' — phải có ít nhất 1 row.")
+        let autoDiscover = args["autoDiscover"]?.boolValue ?? false
+        let rawRows = args["rows"]?.arrayValue ?? []
+        if rawRows.isEmpty && !autoDiscover {
+            return errorResult("Thiếu hoặc rỗng 'rows' — phải có ít nhất 1 row hoặc bật 'autoDiscover'.")
         }
 
         var parsedRows: [UnifiedExportRow] = []
@@ -348,7 +350,8 @@ struct FigmaMCPServer: Sendable {
             scales: scales,
             fallbackScale: fallbackScale,
             overwrite: overwrite,
-            skipIfExistsInCatalog: skipIfExistsInCatalog
+            skipIfExistsInCatalog: skipIfExistsInCatalog,
+            autoDiscover: autoDiscover
         )
 
         let payload = UnifiedExportOutput(
@@ -374,7 +377,16 @@ struct FigmaMCPServer: Sendable {
                     reason: $0.reason
                 )
             },
-            assetCatalogPath: summary.assetCatalogPath
+            assetCatalogPath: summary.assetCatalogPath,
+            coverage: summary.coverage.map {
+                UnifiedExportOutput.Coverage(
+                    discoveredCount: $0.discoveredCount,
+                    exportedCount: $0.exportedCount,
+                    autoAddedRows: $0.autoAddedRows,
+                    skippedNodeIds: $0.skippedNodeIds,
+                    animationNodeIds: $0.animationNodeIds
+                )
+            }
         )
         let hasFailure = summary.rows.contains { $0.status == .failed }
         return .init(content: [text(try JSONOutput.encode(payload))], isError: hasFailure)
@@ -448,6 +460,7 @@ struct FigmaMCPServer: Sendable {
         switch kind {
         case .icon: return "icon"
         case .image: return "image"
+        case .animation: return "animation"
         }
     }
 
@@ -574,9 +587,17 @@ struct UnifiedExportOutput: Encodable {
         let figmaName: String
         let reason: String
     }
+    struct Coverage: Encodable {
+        let discoveredCount: Int
+        let exportedCount: Int
+        let autoAddedRows: [String]
+        let skippedNodeIds: [String]
+        let animationNodeIds: [String]
+    }
     let rows: [Row]
     let warnings: [Warning]
     let assetCatalogPath: String?
+    let coverage: Coverage?
 }
 
 // MARK: - Tokens output

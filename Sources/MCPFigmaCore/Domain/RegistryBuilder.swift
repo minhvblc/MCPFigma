@@ -59,7 +59,6 @@ public struct Registry: Equatable, Sendable {
 }
 
 public struct RegistryBuilder: Sendable {
-    private static let lottiePrefix = "eAnim"
     private static let containerTypes: Set<String> = ["CANVAS", "PAGE", "DOCUMENT"]
     private static let frameTypes: Set<String> = ["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"]
     /// Screen size heuristic: any FRAME within iPhone SE (320pt) to iPad mini (~1024pt) range.
@@ -73,14 +72,15 @@ public struct RegistryBuilder: Sendable {
 
     public func build(rootNode: FigmaNode) -> Registry {
         let scanResult = scanner.scan(rootNode)
-
-        var lottie: [LottiePlaceholder] = []
-        var lottieWarnings: [ScanWarning] = []
-        walkLottie(rootNode, lottie: &lottie, warnings: &lottieWarnings)
-
+        let lottie = scanResult.animations.map {
+            LottiePlaceholder(
+                nodeId: $0.nodeId,
+                figmaName: $0.figmaName,
+                width: $0.width,
+                height: $0.height
+            )
+        }
         let screens = detectScreens(from: rootNode)
-
-        let mergedWarnings = scanResult.warnings + lottieWarnings
 
         return Registry(
             rootNodeId: rootNode.id,
@@ -89,55 +89,8 @@ public struct RegistryBuilder: Sendable {
             screens: screens,
             taggedAssets: scanResult.matches,
             lottiePlaceholders: lottie,
-            warnings: mergedWarnings
+            warnings: scanResult.warnings
         )
-    }
-
-    // MARK: - Lottie walk
-    // Mirrors AssetScanner: stop recursion at every eAnim* node (children are preview keyframes).
-    // Validates the same naming rules as eIC*/eImage* (uppercase ASCII first char, [A-Za-z0-9_]).
-    private func walkLottie(
-        _ node: FigmaNode,
-        lottie: inout [LottiePlaceholder],
-        warnings: inout [ScanWarning]
-    ) {
-        let trimmed = node.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix(Self.lottiePrefix) {
-            let remainder = String(trimmed.dropFirst(Self.lottiePrefix.count))
-            if let validation = Self.validate(remainder: remainder) {
-                warnings.append(ScanWarning(
-                    nodeId: node.id,
-                    figmaName: node.name,
-                    reason: validation
-                ))
-            } else {
-                lottie.append(LottiePlaceholder(
-                    nodeId: node.id,
-                    figmaName: node.name,
-                    width: node.absoluteBoundingBox?.width,
-                    height: node.absoluteBoundingBox?.height
-                ))
-            }
-            return
-        }
-        for child in node.children ?? [] {
-            walkLottie(child, lottie: &lottie, warnings: &warnings)
-        }
-    }
-
-    private static func validate(remainder: String) -> String? {
-        guard let first = remainder.first else {
-            return "Tên eAnim thiếu phần tên — phải có ít nhất 1 ký tự sau prefix"
-        }
-        guard first.isASCII, first.isUppercase else {
-            return "Tên '\(remainder)' không hợp lệ — ký tự đầu sau prefix phải là chữ ASCII viết hoa"
-        }
-        for c in remainder {
-            guard c.isASCII, c.isLetter || c.isNumber || c == "_" else {
-                return "Tên 'eAnim\(remainder)' chứa ký tự không cho phép — chỉ cho phép [A-Za-z0-9_]"
-            }
-        }
-        return nil
     }
 
     // MARK: - Screen detection
