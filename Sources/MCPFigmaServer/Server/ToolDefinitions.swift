@@ -129,10 +129,15 @@ enum ToolDefinitions {
         Export pipeline thống nhất cho mọi loại asset trong 1 lần gọi. Mỗi row \
         khai báo exporter='tagged' (eIC*/eImage*, đi xcassets pipeline với @2x/@3x) \
         hoặc exporter='fallback' (untagged hoặc FLATTEN region, render qua /v1/images \
-        scale 3, dedupe vào sharedAssetsDir, validate PNG signature). Tagged row bị \
-        render lỗi sẽ tự động chuyển sang fallback. Lottie placeholder (strategy= \
-        'lottiePlaceholder') được pass-through, không download. Trả manifest đầy đủ \
-        per-row để skill chỉ việc ghi xuống manifest.json.
+        scale 3 mặc định, dedupe vào sharedAssetsDir, validate PNG signature). Tagged \
+        row bị render lỗi sẽ tự động chuyển sang fallback. Lottie placeholder \
+        (strategy='lottiePlaceholder') được pass-through, không download. Trả manifest \
+        đầy đủ per-row để skill chỉ việc ghi xuống manifest.json. \
+        Fallback exporter cũng dùng được để render full-frame PNG bất kỳ node nào (vd \
+        làm visual reference cho C5 side-by-side compare khi figma-desktop \
+        get_screenshot không khả dụng) — pass row {nodeId, exporter='fallback', \
+        strategy='flatten'} với fallbackScale=2 (xem note ở field fallbackScale về \
+        Claude many-image 2000px limit).
         """,
         inputSchema: .object([
             "type": .string("object"),
@@ -186,7 +191,7 @@ enum ToolDefinitions {
                 ]),
                 "fallbackScale": .object([
                     "type": .string("integer"),
-                    "description": .string("Scale cho fallback path, mặc định 3.")
+                    "description": .string("Scale cho fallback path, mặc định 3. Lưu ý: scale 3 trên iPhone-frame ≈1125×2436 (X) / 1179×2556 (14 Pro) → vượt 2000px là Claude many-image dimension limit. Khi render full-frame để Claude đọc song song với ảnh khác (vd C5 visual diff), dùng 2 (≈750×1624) để tránh lỗi 'exceeds the dimension limit for many-image requests'. Per-asset icon export vẫn nên giữ scale 3.")
                 ]),
                 "overwrite": .object([
                     "type": .string("boolean"),
