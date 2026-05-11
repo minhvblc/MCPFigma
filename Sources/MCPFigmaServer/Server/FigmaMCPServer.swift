@@ -52,13 +52,72 @@ struct FigmaMCPServer: Sendable {
                 return try await handleExportAssetsUnified(args: args, api: api, scanner: scanner)
             case "figma_extract_tokens":
                 return try await handleExtractTokens(args: args, api: api)
+            case "figma_extract_fills":
+                return try await handleExtractFills(args: args, api: api)
             default:
                 return errorResult("Tool không hỗ trợ: \(params.name)")
             }
         } catch let error as FigmaAPIError {
-            return errorResult("Figma API lỗi: \(error)")
+            // P0-2: surface forbidden / unauthorized with concrete fallback steps.
+            return errorResult(Self.humanReadable(error, toolName: params.name))
         } catch {
             return errorResult("Lỗi không xác định: \(error)")
+        }
+    }
+
+    /// P0-2 human-readable mapping for FigmaAPIError. The default `\(error)`
+    /// stringification ("forbidden") gave callers nothing actionable. This
+    /// returns: what failed, why (best-guess from HTTP status), and a list of
+    /// fallback workflows the caller can try.
+    static func humanReadable(_ error: FigmaAPIError, toolName: String) -> String {
+        switch error {
+        case .missingToken:
+            return "FIGMA_API_MISSING_TOKEN: FIGMA_ACCESS_TOKEN env var not set on the MCP server. " +
+                "Edit ~/.claude/mcp.json → mcpServers.figma-assets.env.FIGMA_ACCESS_TOKEN."
+        case .unauthorized:
+            return "FIGMA_API_UNAUTHORIZED (401): the access token is invalid or expired. " +
+                "Generate a new Personal Access Token at https://www.figma.com/settings/tokens and " +
+                "update ~/.claude/mcp.json. Restart Claude Code after editing."
+        case .forbidden:
+            // Most common cause: hitting `/v1/files/<key>/variables/local` on a
+            // non-Enterprise plan, OR the token's owner lacks edit-access to
+            // the file. Return tool-specific fallback advice.
+            let toolSpecific: String
+            if toolName == "figma_extract_tokens" {
+                toolSpecific = """
+
+                Fallback for figma_extract_tokens:
+                  1. Local variables API requires Figma Enterprise OR the file owner must publish variables to a Team library.
+                  2. If neither applies, skip tokens.json and:
+                     a) Run figma_extract_fills on the style-guide node to grab color tokens manually.
+                     b) Read get_design_context on each token node and parse hex literals.
+                  3. tokens.json with empty colors[] is acceptable when usesIKAssetSymbol=false in c1-conventions.json.
+                """
+            } else {
+                toolSpecific = """
+
+                Fallback for \(toolName):
+                  - Verify the token has access to file <fileKey>. The file owner must add the token's user as a viewer/editor.
+                  - If the file is shared by link only (no team), the variables/styles endpoints will 403.
+                """
+            }
+            return "FIGMA_API_FORBIDDEN (403): server refused the request." + toolSpecific
+        case .notFound:
+            return "FIGMA_API_NOT_FOUND (404): node or file not found. Verify the fileKey and nodeId. " +
+                "If the URL is figma.com/design/<key>/<file>?node-id=1-2, nodeId is '1:2' (replace '-' with ':')."
+        case .rateLimited(let retryAfter):
+            let wait = retryAfter.map { "\(Int($0))s" } ?? "the server-provided Retry-After"
+            return "FIGMA_API_RATE_LIMITED (429): wait \(wait) and retry. Reduce parallel calls below 3 if hitting often."
+        case .serverError(let code):
+            return "FIGMA_API_SERVER_ERROR (\(code)): transient. Retry in 30s. If persistent, check https://status.figma.com."
+        case .figmaError(let msg):
+            return "FIGMA_API_ERROR: \(msg)"
+        case .invalidResponse:
+            return "FIGMA_API_INVALID_RESPONSE: response body did not decode. Likely a Figma API schema change; report to MCPFigma maintainer."
+        case .network(let msg):
+            return "FIGMA_API_NETWORK_ERROR: \(msg). Check connectivity to api.figma.com."
+        case .exhaustedRetries(let lastStatus):
+            return "FIGMA_API_EXHAUSTED_RETRIES: gave up after RetryPolicy max attempts. Last status: \(lastStatus.map(String.init) ?? "n/a")."
         }
     }
 
@@ -222,27 +281,59 @@ struct FigmaMCPServer: Sendable {
             return errorResult("Thiếu tham số 'nodeId'.")
         }
         let depth = args["depth"]?.intValue ?? 10
+        // P0-3: pagination + summary mode flags. summaryOnly drops the heavy
+        // taggedAssets[] body, returning only counts + first 10 samples — useful
+        // when the caller just wants to know "how many screens / what convention?"
+        // without burning context on 300+ asset entries.
+        let summaryOnly = args["summaryOnly"]?.boolValue ?? false
+        let pageSize = args["pageSize"]?.intValue
+        let cursor = args["cursor"]?.intValue ?? 0
 
         let response = try await api.fetchNodes(fileKey: fileKey, nodeId: nodeId, depth: depth)
         guard let root = response.nodes[nodeId]?.document else {
             return errorResult("Không tìm thấy node \(nodeId) trong file \(fileKey).")
         }
 
-        let builder = RegistryBuilder(scanner: scanner)
+        // P1-1: parse renameRules and build a custom scanner if provided.
+        let customRules = parseRenameRules(args["renameRules"])
+        let effectiveScanner: AssetScanner
+        if customRules.isEmpty {
+            effectiveScanner = scanner
+        } else {
+            effectiveScanner = AssetScanner(rewriter: AssetNameRewriter(customRules: customRules))
+        }
+        let builder = RegistryBuilder(scanner: effectiveScanner)
         let registry = builder.build(rootNode: root)
+
+        // P0-3: slice taggedAssets when pageSize is provided. When summaryOnly
+        // is true AND pageSize is unset, default to a 10-row sample. nextCursor
+        // is set only when there are more rows to fetch.
+        let totalTaggedAssets = registry.taggedAssets.count
+        let effectivePageSize: Int? = {
+            if let pageSize, pageSize > 0 { return pageSize }
+            if summaryOnly { return 10 }
+            return nil
+        }()
+        let pagedAssets: [FoundAsset]
+        var nextCursor: Int? = nil
+        if let limit = effectivePageSize {
+            let start = max(0, cursor)
+            let end = min(totalTaggedAssets, start + limit)
+            pagedAssets = Array(registry.taggedAssets[start..<end])
+            if end < totalTaggedAssets { nextCursor = end }
+        } else {
+            pagedAssets = registry.taggedAssets
+        }
+
+        // P1-2: recommended-next-call hint. Walks the caller through the most
+        // likely follow-up so they don't have to re-read the SKILL.md.
+        let recommendedNext = Self.makeRegistryRecommendation(registry: registry, fileKey: fileKey)
 
         let payload = RegistryOutput(
             rootNode: .init(nodeId: registry.rootNodeId, name: registry.rootName, type: registry.rootType),
-            screens: registry.screens.map {
-                RegistryOutput.Screen(
-                    nodeId: $0.nodeId,
-                    name: $0.name,
-                    type: $0.type,
-                    width: $0.width,
-                    height: $0.height
-                )
-            },
-            taggedAssets: registry.taggedAssets.map {
+            screens: registry.screens.map { mapScreen($0) },
+            candidateScreens: registry.candidateScreens.map { mapScreen($0) },
+            taggedAssets: pagedAssets.map {
                 RegistryOutput.TaggedAsset(
                     nodeId: $0.nodeId,
                     figmaName: $0.figmaName,
@@ -250,6 +341,8 @@ struct FigmaMCPServer: Sendable {
                     exportName: $0.renamed
                 )
             },
+            taggedAssetsTotalCount: totalTaggedAssets,
+            nextCursor: nextCursor,
             lottiePlaceholders: registry.lottiePlaceholders.map {
                 RegistryOutput.Lottie(
                     nodeId: $0.nodeId,
@@ -264,9 +357,107 @@ struct FigmaMCPServer: Sendable {
                     figmaName: $0.figmaName,
                     reason: $0.reason
                 )
-            }
+            },
+            recommendedNextCall: recommendedNext
         )
         return .init(content: [text(try JSONOutput.encode(payload))], isError: false)
+    }
+
+    /// P1-1: parse `renameRules` array arg into typed RenameRule list.
+    /// Schema:
+    ///   "renameRules": [{
+    ///     "figmaPrefix": "ic/",
+    ///     "renamedPrefix": "icAI",
+    ///     "kind": "icon" | "image" | "animation"
+    ///   }, ...]
+    /// Invalid entries are skipped silently (logged via warnings is overkill
+    /// for an off-by-default feature).
+    private static func parseRenameRules(_ value: Value?) -> [RenameRule] {
+        guard let raw = value?.arrayValue else { return [] }
+        var out: [RenameRule] = []
+        for entry in raw {
+            guard let dict = entry.objectValue,
+                  let figmaPrefix = dict["figmaPrefix"]?.stringValue,
+                  let renamedPrefix = dict["renamedPrefix"]?.stringValue,
+                  let kindRaw = dict["kind"]?.stringValue,
+                  !figmaPrefix.isEmpty,
+                  !renamedPrefix.isEmpty else {
+                continue
+            }
+            let kind: AssetKind
+            switch kindRaw {
+            case "icon": kind = .icon
+            case "image": kind = .image
+            case "animation": kind = .animation
+            default: continue
+            }
+            out.append(RenameRule(figmaPrefix: figmaPrefix, renamedPrefix: renamedPrefix, kind: kind))
+        }
+        return out
+    }
+
+    /// Map a ScreenInfo from the core registry into the wire ScreenInfo.
+    /// Extracted so both `screens` and `candidateScreens` share the conversion.
+    private static func mapScreen(_ info: ScreenInfo) -> RegistryOutput.Screen {
+        RegistryOutput.Screen(
+            nodeId: info.nodeId,
+            name: info.name,
+            type: info.type,
+            width: info.width,
+            height: info.height,
+            depth: info.depth
+        )
+    }
+
+    /// P1-2. Inspect the registry and emit the next-most-useful call. Three
+    /// branches:
+    ///   1. screens populated → recommend fetch design context per screen
+    ///   2. candidateScreens populated → recommend export_assets_unified per
+    ///      candidate so user gets icons even without a clean Board root
+    ///   3. nothing at all → suggest re-rooting on a CANVAS/PAGE ancestor
+    private static func makeRegistryRecommendation(
+        registry: Registry,
+        fileKey: String
+    ) -> RegistryOutput.NextCall? {
+        if !registry.screens.isEmpty {
+            return RegistryOutput.NextCall(
+                tool: "figma_export_assets_unified",
+                rationale: "Found \(registry.screens.count) direct screen(s). " +
+                    "Run export_assets_unified per screen with autoDiscover=true to populate Assets.xcassets.",
+                argsTemplate: [
+                    "fileKey": fileKey,
+                    "nodeId": "<each screen.nodeId>",
+                    "outputDir": "<absolute project path>",
+                    "sharedAssetsDir": "<absolute path under .figma-cache/_shared/assets>",
+                    "autoDiscover": "true"
+                ]
+            )
+        }
+        if !registry.candidateScreens.isEmpty {
+            return RegistryOutput.NextCall(
+                tool: "figma_export_assets_unified",
+                rationale: "Root is a Group — direct screens empty. Use the \(registry.candidateScreens.count) " +
+                    "candidateScreens nodeIds as input. STOP before code-gen until each candidate has had its " +
+                    "design-context + screenshot fetched and verified.",
+                argsTemplate: [
+                    "fileKey": fileKey,
+                    "nodeId": "<each candidateScreens.nodeId>",
+                    "outputDir": "<absolute project path>",
+                    "sharedAssetsDir": "<absolute path under .figma-cache/_shared/assets>",
+                    "autoDiscover": "true"
+                ]
+            )
+        }
+        return RegistryOutput.NextCall(
+            tool: "figma_build_registry",
+            rationale: "Neither screens nor candidateScreens found. Re-root on a CANVAS/PAGE/DOCUMENT " +
+                "ancestor. Use get_metadata at depth=1 on the file page to identify the right rootNodeId.",
+            argsTemplate: [
+                "fileKey": fileKey,
+                "nodeId": "<a CANVAS or PAGE ancestor of the current node>",
+                "depth": "5"
+            ]
+        )
     }
 
     static func handleExportAssetsUnified(
@@ -456,6 +647,50 @@ struct FigmaMCPServer: Sendable {
         return .init(content: [text(try JSONOutput.encode(payload))], isError: false)
     }
 
+    static func handleExtractFills(
+        args: [String: Value],
+        api: FigmaAPI
+    ) async throws -> CallTool.Result {
+        guard let fileKey = args["fileKey"]?.stringValue, !fileKey.isEmpty else {
+            return errorResult("Thiếu tham số 'fileKey'.")
+        }
+        guard let nodeId = args["nodeId"]?.stringValue, !nodeId.isEmpty else {
+            return errorResult("Thiếu tham số 'nodeId'.")
+        }
+        let depth = args["depth"]?.intValue ?? 10
+        let resolveURLs = args["resolveImageUrls"]?.boolValue ?? true
+
+        let response = try await api.fetchNodes(fileKey: fileKey, nodeId: nodeId, depth: depth)
+        let documents: [String: FigmaNode] = response.nodes.reduce(into: [:]) { acc, pair in
+            acc[pair.key] = pair.value.document
+        }
+        if documents.isEmpty {
+            return errorResult("Không tìm thấy node \(nodeId) trong file \(fileKey).")
+        }
+
+        var imageRefURLs: [String: String] = [:]
+        var imageResolutionWarnings: [String] = []
+        if resolveURLs {
+            do {
+                let imagesResponse = try await api.fetchFileImages(fileKey: fileKey)
+                imageRefURLs = imagesResponse.meta?.images ?? [:]
+            } catch let error as FigmaAPIError {
+                imageResolutionWarnings.append(
+                    "/v1/files/\(fileKey)/images lỗi: \(error). IMAGE fills sẽ không kèm imageUrl."
+                )
+            }
+        }
+
+        let result = FillExtractor().extract(nodes: documents, imageRefURLs: imageRefURLs)
+        let payload = FillsOutput(
+            fileKey: fileKey,
+            rootNodeId: nodeId,
+            nodes: result.nodes.map(FillsOutput.Node.init),
+            warnings: result.warnings + imageResolutionWarnings
+        )
+        return .init(content: [text(try JSONOutput.encode(payload))], isError: false)
+    }
+
     private static func kindString(_ kind: AssetKind) -> String {
         switch kind {
         case .icon: return "icon"
@@ -541,6 +776,8 @@ struct RegistryOutput: Encodable {
         let type: String
         let width: Double?
         let height: Double?
+        /// 0 = root itself, 1+ = nested. Only meaningful for candidateScreens.
+        let depth: Int
     }
     struct TaggedAsset: Encodable {
         let nodeId: String
@@ -559,11 +796,28 @@ struct RegistryOutput: Encodable {
         let figmaName: String
         let reason: String
     }
+    /// P1-2 next-call hint — server-side recommendation, replaces the
+    /// "what do I call next?" decision the SKILL.md used to embed.
+    struct NextCall: Encodable {
+        let tool: String
+        let rationale: String
+        let argsTemplate: [String: String]
+    }
     let rootNode: RootNode
     let screens: [Screen]
+    /// P0-1: phone-sized FRAMEs found nested under a non-Board root (Group).
+    /// Empty when `screens` is populated. Consumers should treat these as
+    /// recoverable input and feed each nodeId back into export_assets_unified
+    /// / get_design_context calls per screen.
+    let candidateScreens: [Screen]
     let taggedAssets: [TaggedAsset]
+    /// P0-3: total before pagination. taggedAssets[] may be a slice.
+    let taggedAssetsTotalCount: Int
+    /// P0-3: cursor for the next page, nil when exhausted.
+    let nextCursor: Int?
     let lottiePlaceholders: [Lottie]
     let warnings: [Warning]
+    let recommendedNextCall: NextCall?
 }
 
 // MARK: - Unified export output
@@ -663,4 +917,114 @@ struct TokensOutput: Encodable {
     let other: [NumberToken]
     let typography: [TypographyToken]
     let warnings: [String]
+}
+
+// MARK: - Fills output
+
+struct FillsOutput: Encodable {
+    let fileKey: String
+    let rootNodeId: String
+    let nodes: [Node]
+    let warnings: [String]
+
+    struct Node: Encodable {
+        let nodeId: String
+        let nodeName: String
+        let nodeType: String
+        let width: Double?
+        let height: Double?
+        let fills: [Fill]
+
+        init(_ n: MCPFigmaCore.NodeFills) {
+            self.nodeId = n.nodeId
+            self.nodeName = n.nodeName
+            self.nodeType = n.nodeType
+            self.width = n.width
+            self.height = n.height
+            self.fills = n.fills.map(Fill.init)
+        }
+    }
+
+    struct Fill: Encodable {
+        // `type` is the discriminator: "solid" | "gradient" | "image" | "unsupported".
+        // All optional fields below are populated based on `type`.
+        let type: String
+        let opacity: Double
+        let visible: Bool
+        let blendMode: String?
+        // SOLID:
+        let hex: String?
+        // GRADIENT:
+        let kind: String?
+        let stops: [Stop]?
+        let startPoint: Point?
+        let endPoint: Point?
+        let widthPoint: Point?
+        // IMAGE:
+        let imageRef: String?
+        let scaleMode: String?
+        let imageUrl: String?
+        // UNSUPPORTED:
+        let rawType: String?
+
+        init(_ spec: MCPFigmaCore.FillSpec) {
+            switch spec {
+            case .solid(let s):
+                self.type = "solid"
+                self.opacity = s.opacity
+                self.visible = s.visible
+                self.blendMode = s.blendMode
+                self.hex = s.hex
+                self.kind = nil; self.stops = nil
+                self.startPoint = nil; self.endPoint = nil; self.widthPoint = nil
+                self.imageRef = nil; self.scaleMode = nil; self.imageUrl = nil
+                self.rawType = nil
+            case .gradient(let g):
+                self.type = "gradient"
+                self.opacity = g.opacity
+                self.visible = g.visible
+                self.blendMode = g.blendMode
+                self.hex = nil
+                self.kind = g.kind.rawValue
+                self.stops = g.stops.map { Stop(position: $0.position, hex: $0.hex) }
+                self.startPoint = Point(x: g.startPoint.x, y: g.startPoint.y)
+                self.endPoint = Point(x: g.endPoint.x, y: g.endPoint.y)
+                self.widthPoint = g.widthPoint.map { Point(x: $0.x, y: $0.y) }
+                self.imageRef = nil; self.scaleMode = nil; self.imageUrl = nil
+                self.rawType = nil
+            case .image(let i):
+                self.type = "image"
+                self.opacity = i.opacity
+                self.visible = i.visible
+                self.blendMode = i.blendMode
+                self.hex = nil
+                self.kind = nil; self.stops = nil
+                self.startPoint = nil; self.endPoint = nil; self.widthPoint = nil
+                self.imageRef = i.imageRef
+                self.scaleMode = i.scaleMode
+                self.imageUrl = i.imageUrl
+                self.rawType = nil
+            case .unsupported(let raw, let op, let vis):
+                self.type = "unsupported"
+                self.opacity = op
+                self.visible = vis
+                self.blendMode = nil
+                self.hex = nil
+                self.kind = nil; self.stops = nil
+                self.startPoint = nil; self.endPoint = nil; self.widthPoint = nil
+                self.imageRef = nil; self.scaleMode = nil; self.imageUrl = nil
+                self.rawType = raw
+            }
+        }
+    }
+
+    struct Stop: Encodable {
+        let position: Double
+        let hex: String
+    }
+
+    struct Point: Encodable {
+        let x: Double
+        let y: Double
+    }
 }

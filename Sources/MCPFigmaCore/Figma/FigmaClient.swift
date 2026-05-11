@@ -20,6 +20,15 @@ public protocol FigmaAPI: Sendable {
     func download(_ url: URL) async throws -> Data
     func fetchVariables(fileKey: String) async throws -> FigmaVariablesResponse
     func fetchStyles(fileKey: String) async throws -> FigmaStylesResponse
+    func fetchFileImages(fileKey: String) async throws -> FigmaFileImagesResponse
+}
+
+extension FigmaAPI {
+    /// Default no-op implementation so existing mocks/tests keep compiling without
+    /// having to stub the new endpoint. Real client overrides below.
+    public func fetchFileImages(fileKey: String) async throws -> FigmaFileImagesResponse {
+        FigmaFileImagesResponse(error: nil, status: 200, meta: .init(images: [:]))
+    }
 }
 
 extension FigmaAPI {
@@ -93,6 +102,16 @@ public struct FigmaClient: FigmaAPI {
         let data = try await performJSON(url: url)
         do {
             return try JSONDecoder().decode(FigmaStylesResponse.self, from: data)
+        } catch {
+            throw FigmaAPIError.invalidResponse
+        }
+    }
+
+    public func fetchFileImages(fileKey: String) async throws -> FigmaFileImagesResponse {
+        let url = FigmaEndpoints.fileImages(fileKey: fileKey)
+        let data = try await performJSON(url: url)
+        do {
+            return try JSONDecoder().decode(FigmaFileImagesResponse.self, from: data)
         } catch {
             throw FigmaAPIError.invalidResponse
         }

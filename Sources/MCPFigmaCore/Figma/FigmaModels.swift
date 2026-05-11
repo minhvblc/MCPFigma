@@ -21,6 +21,7 @@ public struct FigmaNode: Decodable, Equatable, Sendable {
     public let absoluteBoundingBox: FigmaBoundingBox?
     public let children: [FigmaNode]?
     public let style: FigmaTypeStyle?
+    public let fills: [FigmaPaint]?
 
     public init(
         id: String,
@@ -28,7 +29,8 @@ public struct FigmaNode: Decodable, Equatable, Sendable {
         type: String,
         absoluteBoundingBox: FigmaBoundingBox? = nil,
         children: [FigmaNode]? = nil,
-        style: FigmaTypeStyle? = nil
+        style: FigmaTypeStyle? = nil,
+        fills: [FigmaPaint]? = nil
     ) {
         self.id = id
         self.name = name
@@ -36,6 +38,107 @@ public struct FigmaNode: Decodable, Equatable, Sendable {
         self.absoluteBoundingBox = absoluteBoundingBox
         self.children = children
         self.style = style
+        self.fills = fills
+    }
+}
+
+// MARK: - Paint (fills)
+
+/// One entry of a Figma node's `fills` array. Figma stores layered fills on a single
+/// node — a typical hero card has [IMAGE, GRADIENT_LINEAR] so the gradient sits on
+/// top of the image. We decode the union loosely (every field optional) and let the
+/// FillExtractor branch on `type`.
+public struct FigmaPaint: Decodable, Equatable, Sendable {
+    public let type: String              // SOLID | GRADIENT_LINEAR | GRADIENT_RADIAL | GRADIENT_ANGULAR | GRADIENT_DIAMOND | IMAGE | EMOJI | VIDEO
+    public let visible: Bool?            // nil → treat as true
+    public let opacity: Double?          // paint-level opacity 0..1, nil → 1
+    public let blendMode: String?        // nil or "NORMAL" → no blend
+    public let color: FigmaColor?        // SOLID
+    public let gradientStops: [FigmaColorStop]?       // GRADIENT_*
+    public let gradientHandlePositions: [FigmaVector2D]?  // GRADIENT_* — [start, end, width-control]
+    public let imageRef: String?         // IMAGE
+    public let scaleMode: String?        // IMAGE — FILL | FIT | TILE | STRETCH | CROP
+    public let imageTransform: [[Double]]?  // IMAGE — 2x3 affine, identity by default
+    public let scalingFactor: Double?    // IMAGE FILL with manual crop adjust
+    public let rotation: Double?         // IMAGE — degrees
+
+    public init(
+        type: String,
+        visible: Bool? = nil,
+        opacity: Double? = nil,
+        blendMode: String? = nil,
+        color: FigmaColor? = nil,
+        gradientStops: [FigmaColorStop]? = nil,
+        gradientHandlePositions: [FigmaVector2D]? = nil,
+        imageRef: String? = nil,
+        scaleMode: String? = nil,
+        imageTransform: [[Double]]? = nil,
+        scalingFactor: Double? = nil,
+        rotation: Double? = nil
+    ) {
+        self.type = type
+        self.visible = visible
+        self.opacity = opacity
+        self.blendMode = blendMode
+        self.color = color
+        self.gradientStops = gradientStops
+        self.gradientHandlePositions = gradientHandlePositions
+        self.imageRef = imageRef
+        self.scaleMode = scaleMode
+        self.imageTransform = imageTransform
+        self.scalingFactor = scalingFactor
+        self.rotation = rotation
+    }
+}
+
+public struct FigmaColor: Decodable, Equatable, Sendable {
+    public let r: Double  // 0..1
+    public let g: Double
+    public let b: Double
+    public let a: Double  // 0..1
+
+    public init(r: Double, g: Double, b: Double, a: Double) {
+        self.r = r; self.g = g; self.b = b; self.a = a
+    }
+}
+
+public struct FigmaVector2D: Decodable, Equatable, Sendable {
+    public let x: Double
+    public let y: Double
+
+    public init(x: Double, y: Double) {
+        self.x = x; self.y = y
+    }
+}
+
+public struct FigmaColorStop: Decodable, Equatable, Sendable {
+    public let position: Double  // 0..1
+    public let color: FigmaColor
+
+    public init(position: Double, color: FigmaColor) {
+        self.position = position
+        self.color = color
+    }
+}
+
+// MARK: - File images (imageRef → CDN URL)
+
+/// Response from `/v1/files/<key>/images` — a flat map of every imageRef in the file
+/// to its rendered CDN URL. Resolves the `imageRef` returned in IMAGE paint fills.
+public struct FigmaFileImagesResponse: Decodable, Sendable {
+    public let error: Bool?
+    public let status: Int?
+    public let meta: Meta?
+
+    public struct Meta: Decodable, Sendable {
+        public let images: [String: String]
+        public init(images: [String: String]) { self.images = images }
+    }
+
+    public init(error: Bool?, status: Int?, meta: Meta?) {
+        self.error = error
+        self.status = status
+        self.meta = meta
     }
 }
 

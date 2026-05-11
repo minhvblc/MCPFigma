@@ -37,6 +37,10 @@ public enum FigmaEndpoints {
         baseURL.appendingPathComponent("/v1/files/\(fileKey)/styles")
     }
 
+    public static func fileImages(fileKey: String) -> URL {
+        baseURL.appendingPathComponent("/v1/files/\(fileKey)/images")
+    }
+
     public static func fileNodes(fileKey: String, nodeIds: [String], depth: Int? = nil) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/v1/files/\(fileKey)/nodes"),

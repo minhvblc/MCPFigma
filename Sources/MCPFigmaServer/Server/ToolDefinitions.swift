@@ -7,7 +7,8 @@ enum ToolDefinitions {
         exportAssets,
         buildRegistry,
         exportAssetsUnified,
-        extractTokens
+        extractTokens,
+        extractFills
     ]
 
     static let listAssets = Tool(
@@ -98,10 +99,14 @@ enum ToolDefinitions {
         description: """
         Trả về registry tổng hợp cho 1 node Figma trong 1 lần gọi: \
         (1) screens — danh sách FRAME giống màn iOS (children trực tiếp của root); \
-        (2) taggedAssets — eIC*/eImage* đã đổi tên iOS (icAI*/imageAI*); \
-        (3) lottiePlaceholders — eAnim* với kích thước frame; \
-        (4) warnings cho tên không hợp lệ. Skill dùng output này thay cho việc gọi \
-        figma_list_assets + walk metadata.json riêng lẻ.
+        (2) candidateScreens — phone-sized FRAME nodes nested under a Group root (P0-1 fix: \
+        khi root là Group thay vì Board, screens sẽ rỗng — đọc candidateScreens thay); \
+        (3) taggedAssets — eIC*/eImage* đã đổi tên iOS (icAI*/imageAI*); \
+        (4) taggedAssetsTotalCount + nextCursor — pagination cho asset list (P0-3 fix); \
+        (5) lottiePlaceholders — eAnim* với kích thước frame; \
+        (6) warnings — non-screen-detection warnings + ROOT_IS_GROUP/NO_DIRECT_SCREENS reasons; \
+        (7) recommendedNextCall — server-side hint về tool kế tiếp nên gọi (P1-2). \
+        Skill dùng output này thay cho việc gọi figma_list_assets + walk metadata.json riêng lẻ.
         """,
         inputSchema: .object([
             "type": .string("object"),
@@ -118,6 +123,22 @@ enum ToolDefinitions {
                 "depth": .object([
                     "type": .string("integer"),
                     "description": .string("Độ sâu tối đa khi fetch cây. Mặc định 10.")
+                ]),
+                "summaryOnly": .object([
+                    "type": .string("boolean"),
+                    "description": .string("Nếu true, taggedAssets[] chỉ trả 10 sample đầu + nextCursor để paginate; full count vẫn được show qua taggedAssetsTotalCount. Mặc định false. Hữu ích khi caller chỉ muốn biết screen count + asset count mà không cần list chi tiết.")
+                ]),
+                "pageSize": .object([
+                    "type": .string("integer"),
+                    "description": .string("P0-3: trang taggedAssets[] tối đa N entries. Khi set, dùng kèm cursor để paginate. Bỏ qua nếu cần full list (size không vượt context limit).")
+                ]),
+                "cursor": .object([
+                    "type": .string("integer"),
+                    "description": .string("P0-3: offset bắt đầu của trang taggedAssets[]. Lấy giá trị nextCursor từ lần gọi trước. Mặc định 0.")
+                ]),
+                "renameRules": .object([
+                    "type": .string("array"),
+                    "description": .string("P1-1: custom prefix rules cho project không dùng convention eIC*/eImage*. Mỗi entry: {figmaPrefix: string, renamedPrefix: string, kind: 'icon'|'image'|'animation'}. Custom rules được check trước built-in. Kebab/snake-case remainder được tự normalize sang camelCase.")
                 ])
             ])
         ])
@@ -204,6 +225,46 @@ enum ToolDefinitions {
                 "autoDiscover": .object([
                     "type": .string("boolean"),
                     "description": .string("Nếu true, server tự quét subtree dưới nodeId qua AssetScanner, sinh tagged row cho mọi eIC*/eImage* tìm được, và merge với rows[] (caller-supplied wins on duplicates by nodeId). eAnim* (Lottie) chỉ được liệt kê trong coverage.animationNodeIds, KHÔNG auto-add. Response thêm khối 'coverage' (discoveredCount, exportedCount, autoAddedRows, skippedNodeIds, animationNodeIds). Mặc định false.")
+                ])
+            ])
+        ])
+    )
+
+    static let extractFills = Tool(
+        name: "figma_extract_fills",
+        description: """
+        Trích cấu trúc paint fills của một subtree Figma — bao quát các trường hợp \
+        figma_extract_tokens không xử lý: background image (IMAGE fill với imageRef + \
+        scaleMode), gradient overlay (GRADIENT_LINEAR/RADIAL với stops + handle \
+        positions), và stack image+gradient (nhiều fill trên cùng node). Chỉ trả về \
+        node "đáng quan tâm": fill duy nhất kiểu SOLID 100% opacity bị filter (đã có \
+        trong design-context.md / tokens.json). Mỗi gradient có stops chuẩn hoá \
+        position+hex, startPoint/endPoint trong unit space (SwiftUI UnitPoint), \
+        opacity paint-level. Mỗi IMAGE fill kèm imageRef đã resolve sang CDN URL \
+        thông qua /v1/files/<key>/images. Skill ghi output vào \
+        .figma-cache/<nodeId>/fills.json và đọc khi codegen ZStack { Image; \
+        LinearGradient }. Nếu /nodes endpoint fail → throw; nếu /files/<key>/images \
+        fail → trả fills không kèm imageUrl + warning.
+        """,
+        inputSchema: .object([
+            "type": .string("object"),
+            "required": .array([.string("fileKey"), .string("nodeId")]),
+            "properties": .object([
+                "fileKey": .object([
+                    "type": .string("string"),
+                    "description": .string("Figma file key.")
+                ]),
+                "nodeId": .object([
+                    "type": .string("string"),
+                    "description": .string("Node ID root — server sẽ walk subtree và lọc node có fill đáng quan tâm (gradient/image/stacked/translucent).")
+                ]),
+                "depth": .object([
+                    "type": .string("integer"),
+                    "description": .string("Độ sâu tối đa khi fetch cây. Mặc định 10 (đủ cho hầu hết screen Figma).")
+                ]),
+                "resolveImageUrls": .object([
+                    "type": .string("boolean"),
+                    "description": .string("Nếu true (mặc định), gọi /v1/files/<key>/images để resolve imageRef → CDN URL cho mọi IMAGE fill. Đặt false để bỏ qua khi không cần URL (tiết kiệm 1 HTTP call).")
                 ])
             ])
         ])
