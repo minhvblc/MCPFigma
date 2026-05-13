@@ -120,4 +120,61 @@ struct AssetNameRewriterTests {
                 == "icAIHome"
         )
     }
+
+    // ── rewriteFlexible: case recovery for designer typos ────────────────────
+
+    @Test("rewriteFlexible matches canonical prefixes strictly (no flag set)")
+    func rewriteFlexibleStrict() throws {
+        let r = try rewriter.rewriteFlexible("eICHome")
+        #expect(r.kind == .icon)
+        #expect(r.renamed == "icAIHome")
+        #expect(r.prefixCaseMismatch == false)
+        #expect(r.originalPrefix == nil)
+    }
+
+    @Test(
+        "rewriteFlexible recovers from case-variant prefix and flags case mismatch",
+        arguments: [
+            ("EICHome",   "icAIHome",      "EIC"),
+            ("EicHome",   "icAIHome",      "Eic"),
+            ("eIcHome",   "icAIHome",      "eIc"),
+            ("EIMAGEBanner", "imageAIBanner", "EIMAGE"),
+            ("EIMageBanner", "imageAIBanner", "EIMage"),
+            ("eANIMSplash", "eAnimSplash",  "eANIM"),
+        ]
+    )
+    func rewriteFlexibleCaseRecovery(input: String, expectedRenamed: String, expectedOriginalPrefix: String) throws {
+        let r = try rewriter.rewriteFlexible(input)
+        #expect(r.renamed == expectedRenamed)
+        #expect(r.prefixCaseMismatch == true)
+        #expect(r.originalPrefix == expectedOriginalPrefix)
+    }
+
+    @Test("rewriteFlexible auto-uppercases lowercase first remainder char")
+    func rewriteFlexibleAutoUppercaseRemainder() throws {
+        // `eichome` — prefix and first remainder char both lowercase. Recovery
+        // canonicalizes the prefix AND auto-uppercases `h` → `H`, otherwise
+        // strict validate() would reject "home" as invalidName.
+        let r = try rewriter.rewriteFlexible("eichome")
+        #expect(r.renamed == "icAIHome")
+        #expect(r.prefixCaseMismatch == true)
+        #expect(r.originalPrefix == "eic")
+    }
+
+    @Test(
+        "rewriteFlexible passes through notExportable for non-Figma names",
+        arguments: ["Home", "icon_home", "iconHome", "random_thing"]
+    )
+    func rewriteFlexibleNotExportable(input: String) {
+        #expect(throws: RewriteError.self) {
+            _ = try rewriter.rewriteFlexible(input)
+        }
+    }
+
+    @Test("rewriteFlexible still rejects illegal chars in the remainder")
+    func rewriteFlexibleIllegalCharsStillRejected() {
+        #expect(throws: RewriteError.self) {
+            _ = try rewriter.rewriteFlexible("EICHome-2")  // hyphen illegal
+        }
+    }
 }

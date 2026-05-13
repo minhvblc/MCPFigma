@@ -200,4 +200,33 @@ struct AssetScannerTests {
         #expect(result.warnings.count == 1)
         #expect(result.warnings.first?.nodeId == "3")
     }
+
+    @Test("Case-variant prefix is exported under canonical name with warning")
+    func caseMismatchExportsWithWarning() {
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "EICHome", type: "FRAME", children: nil),
+            FigmaNode(id: "3", name: "eichome", type: "VECTOR", children: nil),
+            FigmaNode(id: "4", name: "eIMAGEBanner", type: "FRAME", children: nil),
+        ])
+
+        let result = scanner.scan(root)
+
+        // All three should match (case-recovered), so registry / xcassets /
+        // Swift binding chain stays intact.
+        #expect(result.matches.count == 3)
+        let byId = Dictionary(uniqueKeysWithValues: result.matches.map { ($0.nodeId, $0) })
+        #expect(byId["2"]?.renamed == "icAIHome")
+        #expect(byId["3"]?.renamed == "icAIHome")
+        #expect(byId["4"]?.renamed == "imageAIBanner")
+
+        // All three should also emit case-mismatch warnings so the designer
+        // can fix the Figma layer names.
+        #expect(result.warnings.count == 3)
+        let warningIds = Set(result.warnings.map { $0.nodeId })
+        #expect(warningIds == ["2", "3", "4"])
+        // Warning message should mention canonical prefix
+        for w in result.warnings {
+            #expect(w.reason.contains("canonical 'eIC'") || w.reason.contains("canonical 'eImage'"))
+        }
+    }
 }

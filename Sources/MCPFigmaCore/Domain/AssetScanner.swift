@@ -74,7 +74,10 @@ public struct AssetScanner: Sendable {
         warnings: inout [ScanWarning]
     ) {
         do {
-            let result = try rewriter.rewrite(node.name)
+            // Use rewriteFlexible so case-typos like `EICHome` / `eichome` get
+            // recovered and emit a warning (rather than silently dropping the
+            // asset from the registry → xcassets → Swift binding chain).
+            let result = try rewriter.rewriteFlexible(node.name)
             let width = node.absoluteBoundingBox?.width
             let height = node.absoluteBoundingBox?.height
             switch result.kind {
@@ -102,6 +105,17 @@ public struct AssetScanner: Sendable {
                     height: height
                 ))
             }
+            // Surface case-mismatch as a warning so the designer renames the
+            // Figma layer to canonical form. The asset is still exported under
+            // the canonical name — no functional regression.
+            if result.prefixCaseMismatch, let original = result.originalPrefix {
+                let canonical = Self.canonicalPrefix(for: result.kind)
+                warnings.append(ScanWarning(
+                    nodeId: node.id,
+                    figmaName: node.name,
+                    reason: "Prefix '\(original)' does not match canonical '\(canonical)' — exported as '\(result.renamed)'. Rename Figma layer to start with '\(canonical)'."
+                ))
+            }
             // All three prefixes stop descent.
             return
         } catch RewriteError.notExportable {
@@ -122,6 +136,14 @@ public struct AssetScanner: Sendable {
         guard let children = node.children else { return }
         for child in children {
             walk(child, matches: &matches, animations: &animations, warnings: &warnings)
+        }
+    }
+
+    private static func canonicalPrefix(for kind: AssetKind) -> String {
+        switch kind {
+        case .icon:      return "eIC"
+        case .image:     return "eImage"
+        case .animation: return "eAnim"
         }
     }
 
