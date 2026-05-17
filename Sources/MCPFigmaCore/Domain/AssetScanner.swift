@@ -119,7 +119,13 @@ public struct AssetScanner: Sendable {
             // All three prefixes stop descent.
             return
         } catch RewriteError.notExportable {
-            // No prefix here — descend into children to keep searching.
+            // No prefix. Untagged node — auto-export it when it is a graphic
+            // leaf (no children, a VECTOR or an IMAGE-filled node). Otherwise
+            // fall through to descend into children, exactly as before.
+            if Self.isUntaggedExportableLeaf(node) {
+                appendUntaggedLeaf(node, matches: &matches, warnings: &warnings)
+                return
+            }
         } catch let error as RewriteError {
             // Prefix matched but remainder couldn't be salvaged (illegal chars
             // or bare prefix). Warn + stop descent: the prefix is a clear tag,
@@ -142,6 +148,56 @@ public struct AssetScanner: Sendable {
         guard let children = node.children else { return }
         for child in children {
             walk(child, matches: &matches, animations: &animations, warnings: &warnings)
+        }
+    }
+
+    /// An untagged node qualifies for auto-export only when it is a *leaf*
+    /// (no children — a container is still descended into) AND it renders as a
+    /// graphic: a `VECTOR`, or any node carrying a visible IMAGE fill. Plain
+    /// frames, groups and text nodes are skipped.
+    private static func isUntaggedExportableLeaf(_ node: FigmaNode) -> Bool {
+        guard (node.children ?? []).isEmpty else { return false }
+        return node.type == "VECTOR" || hasImageFill(node)
+    }
+
+    private static func hasImageFill(_ node: FigmaNode) -> Bool {
+        guard let fills = node.fills else { return false }
+        return fills.contains { $0.type == "IMAGE" && ($0.visible ?? true) }
+    }
+
+    /// Builds a FoundAsset for an untagged graphic leaf. An IMAGE-filled node
+    /// is classified `.image`; a bare VECTOR is `.icon`. The asset name is
+    /// derived from the layer name via `AssetNameRewriter.rewriteUntagged` — an
+    /// unusable layer name yields a warning instead of a broken asset.
+    private func appendUntaggedLeaf(
+        _ node: FigmaNode,
+        matches: inout [FoundAsset],
+        warnings: inout [ScanWarning]
+    ) {
+        let kind: AssetKind = Self.hasImageFill(node) ? .image : .icon
+        let width = node.absoluteBoundingBox?.width
+        let height = node.absoluteBoundingBox?.height
+        do {
+            let base = try rewriter.rewriteUntagged(node.name, kind: kind)
+            let renamed = AssetNameRewriter.appendSizeSuffix(
+                renamed: base,
+                width: width,
+                height: height
+            )
+            matches.append(FoundAsset(
+                nodeId: node.id,
+                figmaName: node.name,
+                kind: kind,
+                renamed: renamed,
+                width: width,
+                height: height
+            ))
+        } catch {
+            warnings.append(ScanWarning(
+                nodeId: node.id,
+                figmaName: node.name,
+                reason: "Untagged leaf '\(node.name)' không tạo được tên iOS hợp lệ — bỏ qua. Đặt lại tên layer cho rõ hoặc gắn prefix eIC/eImage."
+            ))
         }
     }
 

@@ -209,4 +209,36 @@ struct AssetNameRewriterTests {
             _ = try rewriter.rewriteFlexible(input)
         }
     }
+
+    // ── rewriteUntagged: naming for prefix-less (untagged) nodes ──────────────
+
+    @Test(
+        "rewriteUntagged derives an icAI* name from an untagged layer name",
+        arguments: [
+            ("search", "icAISearch"),
+            ("Search Icon", "icAISearchIcon"),
+            ("hero-banner", "icAIHeroBanner"),
+            ("ic/close", "icAIIcClose"),
+            ("Vector", "icAIVector"),
+            ("Vector 2", "icAIVector2")
+        ]
+    )
+    func rewriteUntaggedIcon(input: String, expected: String) throws {
+        #expect(try rewriter.rewriteUntagged(input, kind: .icon) == expected)
+    }
+
+    @Test("rewriteUntagged derives an imageAI* name for image kind")
+    func rewriteUntaggedImage() throws {
+        #expect(try rewriter.rewriteUntagged("hero banner", kind: .image) == "imageAIHeroBanner")
+    }
+
+    @Test(
+        "rewriteUntagged rejects layer names with no usable identifier",
+        arguments: ["", "   ", "★★★", "123", "42px"]
+    )
+    func rewriteUntaggedRejectsUnusable(input: String) {
+        #expect(throws: RewriteError.self) {
+            _ = try rewriter.rewriteUntagged(input, kind: .icon)
+        }
+    }
 }

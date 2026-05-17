@@ -17,7 +17,10 @@ Swift MCP server export PNG icons/images từ Figma về project iOS. Trước k
 | `eIC*`    | icon. Stop descent. Tải qua tagged pipeline (`@2x`/`@3x` → `.xcassets`).               |
 | `eImage*` | image. Stop descent. Tải qua tagged pipeline.                                          |
 | `eAnim*`  | lottie placeholder. Stop descent. **KHÔNG tải.** Skill SwiftUI tự đặt placeholder.    |
-| khác      | Descend vào children, tiếp tục tìm.                                                     |
+| khác (graphic leaf) | Node không prefix + không có con + là `VECTOR` hoặc có `IMAGE` fill → auto-export như asset; tên `icAI*`/`imageAI*` suy từ tên layer. Leaf không graphic (FRAME/TEXT…) → bỏ qua. |
+| khác (có con) | Descend vào children, tiếp tục tìm.                                                     |
+
+> **2026-05-18 — mở rộng hàng "khác":** untagged graphic leaf giờ được auto-export (quyết định của user — thay hành vi cũ "node untagged không bao giờ thành asset"). 3 prefix `eIC`/`eImage`/`eAnim` vẫn nguyên (phần SACRED không đổi). Thực thi qua `AssetScanner.isUntaggedExportableLeaf` + `AssetNameRewriter.rewriteUntagged`; contract encode trong các test `AssetScannerTests` tên "Untagged …".
 
 Validate remainder (strict `rewrite()`): ký tự đầu tiên sau prefix phải ASCII uppercase; chỉ cho phép `[A-Za-z0-9_]`. Scanner mặc định gọi `rewriteFlexible` — auto-uppercase lowercase first char (`eIChome` → `icAIHome`).
 

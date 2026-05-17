@@ -50,11 +50,14 @@ struct AssetScannerTests {
         #expect(result.warnings.isEmpty)
     }
 
-    @Test("Tree without matching prefixes returns empty")
-    func noMatches() {
+    @Test("Untagged tree with no graphic leaves returns empty")
+    func untaggedNonGraphicTreeReturnsEmpty() {
+        // FRAME containers + a TEXT leaf — none is a VECTOR or IMAGE-filled
+        // node, so nothing is auto-exported and descent finds no tagged nodes.
         let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
             FigmaNode(id: "2", name: "normal", type: "FRAME", children: [
-                FigmaNode(id: "3", name: "Home", type: "VECTOR", children: nil)
+                FigmaNode(id: "3", name: "Label", type: "TEXT", children: nil),
+                FigmaNode(id: "4", name: "Spacer", type: "FRAME", children: nil)
             ])
         ])
         let result = scanner.scan(root)
@@ -247,5 +250,119 @@ struct AssetScannerTests {
         for w in result.warnings {
             #expect(w.reason.contains("canonical 'eIC'") || w.reason.contains("canonical 'eImage'"))
         }
+    }
+
+    // ── Untagged graphic-leaf auto-export ────────────────────────────────────
+
+    @Test("Untagged VECTOR leaf is auto-exported as an icon")
+    func untaggedVectorLeafExportedAsIcon() {
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "container", type: "FRAME", children: [
+                FigmaNode(id: "3", name: "search", type: "VECTOR", children: nil)
+            ])
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.count == 1)
+        #expect(result.matches.first?.nodeId == "3")
+        #expect(result.matches.first?.kind == .icon)
+        #expect(result.matches.first?.renamed == "icAISearch")
+        #expect(result.warnings.isEmpty)
+    }
+
+    @Test("Untagged IMAGE-filled leaf is auto-exported as an image")
+    func untaggedImageFillLeafExportedAsImage() {
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(
+                id: "2",
+                name: "hero banner",
+                type: "RECTANGLE",
+                children: nil,
+                fills: [FigmaPaint(type: "IMAGE", imageRef: "abc")]
+            )
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.count == 1)
+        #expect(result.matches.first?.kind == .image)
+        #expect(result.matches.first?.renamed == "imageAIHeroBanner")
+    }
+
+    @Test("Untagged container with children is still descended into")
+    func untaggedContainerStillDescends() {
+        // A plain FRAME with children must NOT be exported itself — the
+        // scanner descends and still finds the tagged node inside.
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "section", type: "FRAME", children: [
+                FigmaNode(id: "3", name: "eICHome", type: "FRAME", children: nil)
+            ])
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.count == 1)
+        #expect(result.matches.first?.renamed == "icAIHome")
+    }
+
+    @Test("Untagged non-graphic leaf (FRAME / TEXT) is skipped")
+    func untaggedNonGraphicLeafSkipped() {
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "empty box", type: "FRAME", children: nil),
+            FigmaNode(id: "3", name: "Title", type: "TEXT", children: nil)
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.isEmpty)
+        #expect(result.warnings.isEmpty)
+    }
+
+    @Test("Untagged VECTOR leaf gets a WxH size suffix from its bounding box")
+    func untaggedVectorLeafAppendsSizeSuffix() {
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(
+                id: "2",
+                name: "close",
+                type: "VECTOR",
+                absoluteBoundingBox: FigmaBoundingBox(x: 0, y: 0, width: 24, height: 24),
+                children: nil
+            )
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.first?.renamed == "icAIClose24x24")
+    }
+
+    @Test("Untagged graphic leaf with an unusable layer name warns instead of exporting")
+    func untaggedLeafWithUnusableNameWarns() {
+        // A VECTOR leaf named only with symbols yields no valid identifier.
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "★★★", type: "VECTOR", children: nil)
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.isEmpty)
+        #expect(result.warnings.count == 1)
+        #expect(result.warnings.first?.nodeId == "2")
+    }
+
+    @Test("Tagged node still stops descent over untagged VECTOR children")
+    func taggedStopsDescentOverUntaggedChildren() {
+        // Regression: an eIC node with untagged VECTOR children exports only
+        // itself — the VECTOR children must NOT also surface as assets.
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "eICHome", type: "FRAME", children: [
+                FigmaNode(id: "3", name: "stroke", type: "VECTOR", children: nil)
+            ])
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.count == 1)
+        #expect(result.matches.first?.nodeId == "2")
     }
 }

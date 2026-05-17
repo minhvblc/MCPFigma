@@ -16,6 +16,8 @@ enum ToolDefinitions {
         description: """
         Liệt kê các asset có prefix eIC* (icon) hoặc eImage* (image) trong một node Figma. \
         Node có prefix eAnim* (Lottie placeholder) sẽ bị bỏ qua, không đào sâu vào con. \
+        Ngoài ra, node graphic-leaf chưa đặt tên (VECTOR hoặc có IMAGE fill, không có con) \
+        cũng được tự nhận diện và đặt tên icAI*/imageAI* suy từ tên layer. \
         Không tải file — chỉ preview để người dùng confirm trước khi export.
         """,
         inputSchema: .object([
@@ -41,7 +43,8 @@ enum ToolDefinitions {
     static let exportAssets = Tool(
         name: "figma_export_assets",
         description: """
-        Tải các asset eIC*/eImage* trong một node Figma về thư mục đích dưới dạng PNG \
+        Tải các asset eIC*/eImage* — và node graphic-leaf untagged tự nhận diện (VECTOR \
+        hoặc có IMAGE fill, không có con) — trong một node Figma về thư mục đích dưới dạng PNG \
         @2x và @3x, đổi tên theo convention iOS (icAI*/imageAI*). Node có prefix \
         eAnim* (Lottie placeholder) sẽ bị bỏ qua, không đào sâu vào con. Nếu truyền \
         xcodeProjectPath hoặc assetCatalogPath thì asset export xong sẽ được import \
@@ -101,7 +104,8 @@ enum ToolDefinitions {
         (1) screens — danh sách FRAME giống màn iOS (children trực tiếp của root); \
         (2) candidateScreens — phone-sized FRAME nodes nested under a Group root (P0-1 fix: \
         khi root là Group thay vì Board, screens sẽ rỗng — đọc candidateScreens thay); \
-        (3) taggedAssets — eIC*/eImage* đã đổi tên iOS (icAI*/imageAI*); \
+        (3) taggedAssets — eIC*/eImage* đã đổi tên iOS (icAI*/imageAI*), kèm cả node graphic-leaf \
+        untagged (VECTOR / IMAGE fill, không có con) tự nhận diện cùng tên icAI*/imageAI*; \
         (4) taggedAssetsTotalCount + nextCursor — pagination cho asset list (P0-3 fix); \
         (5) lottiePlaceholders — eAnim* với kích thước frame; \
         (6) warnings — non-screen-detection warnings + ROOT_IS_GROUP/NO_DIRECT_SCREENS reasons; \
@@ -224,7 +228,7 @@ enum ToolDefinitions {
                 ]),
                 "autoDiscover": .object([
                     "type": .string("boolean"),
-                    "description": .string("Nếu true, server tự quét subtree dưới nodeId qua AssetScanner, sinh tagged row cho mọi eIC*/eImage* tìm được, và merge với rows[] (caller-supplied wins on duplicates by nodeId). eAnim* (Lottie) chỉ được liệt kê trong coverage.animationNodeIds, KHÔNG auto-add. Response thêm khối 'coverage' (discoveredCount, exportedCount, autoAddedRows, skippedNodeIds, animationNodeIds). Mặc định false.")
+                    "description": .string("Nếu true, server tự quét subtree dưới nodeId qua AssetScanner, sinh tagged row cho mọi eIC*/eImage* + node graphic-leaf untagged tìm được, và merge với rows[] (caller-supplied wins on duplicates by nodeId). eAnim* (Lottie) chỉ được liệt kê trong coverage.animationNodeIds, KHÔNG auto-add. Response thêm khối 'coverage' (discoveredCount, exportedCount, autoAddedRows, skippedNodeIds, animationNodeIds). Mặc định false.")
                 ])
             ])
         ])

@@ -198,6 +198,26 @@ public struct AssetNameRewriter: Sendable {
         throw RewriteError.notExportable(figmaName)
     }
 
+    /// Derives an iOS asset name for an UNTAGGED node — one that carries no
+    /// eIC/eImage/eAnim prefix. AssetScanner calls this when it auto-exports
+    /// an untagged graphic leaf (a VECTOR or IMAGE-filled node with no
+    /// children). The Figma layer name is split on every run of non-ASCII-
+    /// alphanumeric characters, each segment PascalCased and joined, then the
+    /// iOS replacement prefix for `kind` is prepended. Throws `invalidName`
+    /// when the layer name yields no usable identifier (empty, symbol-only,
+    /// or digit-leading).
+    public func rewriteUntagged(_ figmaName: String, kind: AssetKind) throws -> String {
+        let identifier = Self.pascalCaseIdentifier(figmaName)
+        guard let first = identifier.first, first.isASCII, first.isLetter else {
+            throw RewriteError.invalidName(figmaName)
+        }
+        switch kind {
+        case .icon:      return Self.iconReplacement + identifier
+        case .image:     return Self.imageReplacement + identifier
+        case .animation: throw RewriteError.invalidName(figmaName)
+        }
+    }
+
     /// More permissive remainder validation for custom rules. Designers using
     /// "ic/HomeFilled" expect "HomeFilled" — strict uppercase-first is fine,
     /// but kebab-case "ic/home-filled" should normalize too. Convert kebab/snake
@@ -222,6 +242,18 @@ public struct AssetNameRewriter: Sendable {
         }
         let parts = raw.split(whereSeparator: { "-_/".contains($0) })
         return parts.enumerated().map { idx, part in
+            let s = String(part)
+            return s.prefix(1).uppercased() + s.dropFirst()
+        }.joined()
+    }
+
+    /// Splits an arbitrary Figma layer name on every run of non-ASCII-
+    /// alphanumeric characters and PascalCases each segment: "search / active"
+    /// → "SearchActive", "hero-banner" → "HeroBanner". Returns "" when nothing
+    /// survives (empty or symbol-only input).
+    private static func pascalCaseIdentifier(_ raw: String) -> String {
+        let segments = raw.split(whereSeparator: { !($0.isASCII && ($0.isLetter || $0.isNumber)) })
+        return segments.map { part -> String in
             let s = String(part)
             return s.prefix(1).uppercased() + s.dropFirst()
         }.joined()
