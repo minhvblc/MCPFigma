@@ -165,9 +165,12 @@ struct AssetExporterTests {
 
     @Test("Scanner warnings are propagated to summary")
     func warningsPropagated() async throws {
+        // `eICHome-2` has an illegal `-` so it's unsalvageable and emits a
+        // warning. Lowercase-remainder names like `eIChome` now auto-recover
+        // (no warning), so we can't use them to test the propagation path.
         let root = FigmaNode(id: "root", name: "Page", type: "CANVAS", children: [
             FigmaNode(id: "a", name: "eICHome", type: "FRAME", children: nil),
-            FigmaNode(id: "b", name: "eIChome", type: "FRAME", children: nil)
+            FigmaNode(id: "b", name: "eICHome-2", type: "FRAME", children: nil)
         ])
         let fake = FakeFigmaAPI(
             nodes: makeResponse(rootId: "root", node: root),
@@ -186,7 +189,7 @@ struct AssetExporterTests {
         )
 
         #expect(summary.warnings.count == 1)
-        #expect(summary.warnings.first?.figmaName == "eIChome")
+        #expect(summary.warnings.first?.figmaName == "eICHome-2")
     }
 
     @Test("skipIfExistsInCatalog skips download when imageset đã có trong catalog")

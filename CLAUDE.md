@@ -19,9 +19,11 @@ Swift MCP server export PNG icons/images từ Figma về project iOS. Trước k
 | `eAnim*`  | lottie placeholder. Stop descent. **KHÔNG tải.** Skill SwiftUI tự đặt placeholder.    |
 | khác      | Descend vào children, tiếp tục tìm.                                                     |
 
-Validate remainder: ký tự đầu tiên sau prefix phải ASCII uppercase; chỉ cho phép `[A-Za-z0-9_]`.
+Validate remainder (strict `rewrite()`): ký tự đầu tiên sau prefix phải ASCII uppercase; chỉ cho phép `[A-Za-z0-9_]`. Scanner mặc định gọi `rewriteFlexible` — auto-uppercase lowercase first char (`eIChome` → `icAIHome`).
 
-**Edge case đã quyết:** node có prefix tagged nhưng remainder malformed (vd `eIChome`, `eImage`) → emit warning **VÀ vẫn descend** (coi như typo trên parent, con vẫn có thể valid). Có 2 test enforce điều này: `invalidPrefixWarnsAndStillRecurses`, `invalidImageContainerStillRecurses` trong `AssetScannerTests.swift`. **Không sửa hành vi này nếu chưa hỏi user.**
+**Case-insensitive prefix recovery:** `EIC`, `eic`, `eIc`, `EICHome`, `EIChome`, `eImagebanner`, `EANIMSplash` ... đều được nhận diện qua `rewriteFlexible`. Prefix non-canonical (vd `EIChome`) emit warning case-mismatch; prefix canonical chỉ với remainder lowercase (vd `eIChome`) thì không warning vì chỉ là remainder auto-fix. Single source of truth (`eIC`/`eImage`/`eAnim`) vẫn chỉ trong `AssetNameRewriter`.
+
+**Edge case đã quyết:** node có prefix tagged nhưng remainder không salvage được (rỗng vd `eIC`/`eImage`, hoặc illegal chars vd `eICHome-2`) → emit warning **VÀ stop descent** (prefix là tag rõ ràng, không recurse qua node sai remainder). 2 test enforce: `invalidPrefixWarnsAndStopsDescent`, `invalidImageContainerStopsDescent` trong `AssetScannerTests.swift`. **Không sửa hành vi này nếu chưa hỏi user.**
 
 ## Invariants kiến trúc
 

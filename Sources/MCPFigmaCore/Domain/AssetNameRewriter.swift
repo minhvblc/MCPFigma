@@ -92,16 +92,21 @@ public struct AssetNameRewriter: Sendable {
     /// nor case-insensitive match works (or when remainder has illegal
     /// characters).
     public func rewriteFlexible(_ figmaName: String) throws -> RewriteResult {
-        // Strict path first — preserves all existing behavior + test expectations.
+        // Strict path first — preserves canonical behavior + test expectations.
         do {
             let strict = try rewrite(figmaName)
             return RewriteResult(kind: strict.kind, renamed: strict.renamed,
                                  prefixCaseMismatch: false, originalPrefix: nil)
         } catch RewriteError.notExportable {
-            // Fall through to case-insensitive recovery below
+            // No prefix match — recovery tries case-insensitive prefix below.
+        } catch RewriteError.invalidName {
+            // Prefix matched strictly but remainder failed (e.g. `eIChome` with
+            // lowercase `h`). Recovery can auto-uppercase the first remainder
+            // char and salvage. Bare-prefix names (`eIC`, empty remainder) will
+            // still fail recovery and re-throw invalidName.
         } catch {
-            // invalidName / containsIllegalChars from strict path — designer
-            // had the right prefix case but a bad remainder. Surface as-is.
+            // containsIllegalChars — `-`, `/`, whitespace, non-ASCII letters.
+            // Not salvageable; surface as-is so caller can emit a clear warning.
             throw error
         }
 
@@ -120,8 +125,6 @@ public struct AssetNameRewriter: Sendable {
             let lowerPrefix = canonPrefix.lowercased()
             guard trimmedLower.hasPrefix(lowerPrefix) else { continue }
             let originalPrefix = String(trimmed.prefix(canonPrefix.count))
-            // Skip the strict-equal case (handled by rewrite() above)
-            if originalPrefix == canonPrefix { continue }
             let remainder = String(trimmed.dropFirst(canonPrefix.count))
             // Validate the remainder, auto-uppercasing the first char when it's
             // a lowercase ASCII letter (common typo: `eichome` → `eIChome` →
@@ -143,8 +146,13 @@ public struct AssetNameRewriter: Sendable {
             } else {
                 renamed = replacement + normalizedRemainder
             }
+            // Only flag mismatch when the prefix itself was non-canonical. A
+            // canonical prefix with a lowercase remainder (e.g. `eIChome`) is
+            // a remainder-only fix and shouldn't surface a "prefix case" warning.
+            let isMismatch = (originalPrefix != canonPrefix)
             return RewriteResult(kind: kind, renamed: renamed,
-                                 prefixCaseMismatch: true, originalPrefix: originalPrefix)
+                                 prefixCaseMismatch: isMismatch,
+                                 originalPrefix: isMismatch ? originalPrefix : nil)
         }
 
         // No case-variant matched either — fall through to original error

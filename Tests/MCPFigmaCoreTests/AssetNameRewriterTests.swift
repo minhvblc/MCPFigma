@@ -177,4 +177,36 @@ struct AssetNameRewriterTests {
             _ = try rewriter.rewriteFlexible("EICHome-2")  // hyphen illegal
         }
     }
+
+    @Test(
+        "rewriteFlexible auto-recovers canonical prefix + lowercase remainder, no mismatch flag",
+        arguments: [
+            ("eIChome",       "icAIHome",      AssetKind.icon),
+            ("eImagebanner",  "imageAIBanner", .image),
+            ("eAnimsplash",   "eAnimSplash",   .animation),
+        ]
+    )
+    func rewriteFlexibleRecoversLowercaseRemainderWithCanonicalPrefix(
+        input: String, expectedRenamed: String, expectedKind: AssetKind
+    ) throws {
+        // Strict rewrite() throws invalidName for these (canonical prefix +
+        // lowercase remainder first char). Flexible now retries via the
+        // case-insensitive recovery loop, auto-uppercases the remainder, and
+        // since the prefix itself is canonical, reports no mismatch.
+        let r = try rewriter.rewriteFlexible(input)
+        #expect(r.kind == expectedKind)
+        #expect(r.renamed == expectedRenamed)
+        #expect(r.prefixCaseMismatch == false)
+        #expect(r.originalPrefix == nil)
+    }
+
+    @Test(
+        "rewriteFlexible still rejects truly malformed names (bare prefix, illegal char)",
+        arguments: ["eIC", "eImage", "eAnim", "eIC_", "eICHome-2"]
+    )
+    func rewriteFlexibleStillRejectsTrueMalformed(input: String) {
+        #expect(throws: RewriteError.self) {
+            _ = try rewriter.rewriteFlexible(input)
+        }
+    }
 }

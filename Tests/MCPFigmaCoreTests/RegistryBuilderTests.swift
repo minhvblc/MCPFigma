@@ -76,19 +76,22 @@ struct RegistryBuilderTests {
 
     @Test("Invalid eAnim name produces a warning, no placeholder")
     func invalidLottieName() {
+        // `eAnim-load` has an illegal `-` in the remainder. Lowercase first
+        // chars (e.g. `eAnimloading`) auto-recover via rewriteFlexible, so we
+        // pick a name that's truly unsalvageable to assert the warning path.
         let root = FigmaNode(
             id: "0:1",
             name: "Page",
             type: "FRAME",
             absoluteBoundingBox: FigmaBoundingBox(x: 0, y: 0, width: 375, height: 812),
             children: [
-                FigmaNode(id: "1:1", name: "eAnimloading", type: "FRAME")
+                FigmaNode(id: "1:1", name: "eAnim-load", type: "FRAME")
             ]
         )
         let registry = builder.build(rootNode: root)
         #expect(registry.lottiePlaceholders.isEmpty)
         #expect(registry.warnings.count == 1)
-        #expect(registry.warnings.first?.figmaName == "eAnimloading")
+        #expect(registry.warnings.first?.figmaName == "eAnim-load")
     }
 
     @Test("Single FRAME root → single screen entry")

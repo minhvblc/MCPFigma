@@ -119,18 +119,24 @@ public struct AssetScanner: Sendable {
             // All three prefixes stop descent.
             return
         } catch RewriteError.notExportable {
+            // No prefix here — descend into children to keep searching.
         } catch let error as RewriteError {
+            // Prefix matched but remainder couldn't be salvaged (illegal chars
+            // or bare prefix). Warn + stop descent: the prefix is a clear tag,
+            // so we treat the node as terminal rather than recursing past it.
             warnings.append(ScanWarning(
                 nodeId: node.id,
                 figmaName: node.name,
                 reason: Self.reason(for: error)
             ))
+            return
         } catch {
             warnings.append(ScanWarning(
                 nodeId: node.id,
                 figmaName: node.name,
                 reason: "Unexpected rewrite error: \(error)"
             ))
+            return
         }
 
         guard let children = node.children else { return }

@@ -77,26 +77,27 @@ struct AssetScannerTests {
         #expect(result.matches.first?.renamed == "icAIDeep")
     }
 
-    @Test("Invalid-prefix node emits warning but still scans valid descendants")
-    func invalidPrefixWarnsAndStillRecurses() {
+    @Test("Bare/malformed icon prefix emits warning AND stops descent")
+    func invalidPrefixWarnsAndStopsDescent() {
+        // `eIC` (bare prefix, empty remainder) is unsalvageable — the prefix
+        // is a clear tag, so we treat the node as terminal. The valid child
+        // `eICInside` must NOT be exported.
         let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
-            FigmaNode(id: "2", name: "eIChome", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "eIC", type: "FRAME", children: [
                 FigmaNode(id: "3", name: "eICInside", type: "FRAME", children: nil)
             ])
         ])
 
         let result = scanner.scan(root)
 
-        #expect(result.matches.count == 1)
-        #expect(result.matches.first?.nodeId == "3")
-        #expect(result.matches.first?.renamed == "icAIInside")
+        #expect(result.matches.isEmpty)
         #expect(result.warnings.count == 1)
         #expect(result.warnings.first?.nodeId == "2")
-        #expect(result.warnings.first?.figmaName == "eIChome")
+        #expect(result.warnings.first?.figmaName == "eIC")
     }
 
-    @Test("Invalid eImage container still allows nested exportable image")
-    func invalidImageContainerStillRecurses() {
+    @Test("Bare eImage container emits warning AND stops descent")
+    func invalidImageContainerStopsDescent() {
         let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
             FigmaNode(id: "2", name: "eImage", type: "FRAME", children: [
                 FigmaNode(id: "3", name: "eImageBanner", type: "FRAME", children: nil)
@@ -105,12 +106,30 @@ struct AssetScannerTests {
 
         let result = scanner.scan(root)
 
-        #expect(result.matches.count == 1)
-        #expect(result.matches.first?.nodeId == "3")
-        #expect(result.matches.first?.kind == .image)
-        #expect(result.matches.first?.renamed == "imageAIBanner")
+        #expect(result.matches.isEmpty)
         #expect(result.warnings.count == 1)
         #expect(result.warnings.first?.nodeId == "2")
+        #expect(result.warnings.first?.figmaName == "eImage")
+    }
+
+    @Test("Canonical prefix with lowercase remainder is auto-recovered without warning")
+    func canonicalPrefixWithLowercaseRemainderRecovers() {
+        // `eIChome` and `eImagebanner` have canonical prefixes but lowercase
+        // remainder first chars. Recovery auto-uppercases (`home`→`Home`,
+        // `banner`→`Banner`) and produces canonical iOS names. Because the
+        // prefix itself is canonical, no case-mismatch warning is emitted.
+        let root = FigmaNode(id: "1", name: "Root", type: "FRAME", children: [
+            FigmaNode(id: "2", name: "eIChome", type: "FRAME", children: nil),
+            FigmaNode(id: "3", name: "eImagebanner", type: "FRAME", children: nil),
+        ])
+
+        let result = scanner.scan(root)
+
+        #expect(result.matches.count == 2)
+        let byId = Dictionary(uniqueKeysWithValues: result.matches.map { ($0.nodeId, $0) })
+        #expect(byId["2"]?.renamed == "icAIHome")
+        #expect(byId["3"]?.renamed == "imageAIBanner")
+        #expect(result.warnings.isEmpty)
     }
 
     @Test("Illegal-char node (eICHome-2) emits warning")
